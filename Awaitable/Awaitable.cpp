@@ -29,8 +29,26 @@ awaitable<int> named_counter(std::string name)
     co_return 42;
 }
 
+awaitable<void> test_exception()
+{
+    co_await awaitable<void>{};
+
+    throw 0;
+
+    std::cout << "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" << std::endl;
+}
+
 awaitable<void> test()
 {
+    try
+    {
+        co_await test_exception();
+    }
+    catch (...)
+    {
+        std::cout << "caught exception" << std::endl;
+    }
+
     auto x = co_await named_counter("x");
     std::cout << "### after co_await named_counter(x): " << x << std::endl;
 

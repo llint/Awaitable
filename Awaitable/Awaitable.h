@@ -90,6 +90,12 @@ public:
             }
             return suspend_always{}; // NB: if we want to access the return value in await_resume, we need to keep the current coroutine around, even though coro.done() is now true! 
         }
+
+        std::exception_ptr _exp;
+        void set_exception(std::exception_ptr exp)
+        {
+            _exp = std::move(exp);
+        }
     };
 
     bool await_ready() noexcept
@@ -124,8 +130,20 @@ public:
         }
     }
 
-    T await_resume() noexcept
+    T await_resume()
     {
+        if (_coroutine)
+        {
+            if (_coroutine.promise()._exp)
+            {
+                throw _coroutine.promise()._exp;
+            }
+        }
+        else if (_exp)
+        {
+            throw _exp;
+        }
+
         return _coroutine ? _coroutine.promise().get_value() : _value.get();
     }
 
@@ -147,6 +165,11 @@ public:
         set_ready();
     }
 
+    void set_exception(std::exception_ptr exp)
+    {
+        _exp = std::move(exp);
+    }
+
 private:
     struct type_void
     {
@@ -160,6 +183,8 @@ private:
     };
 
     typename std::conditional<std::is_same<T, void>::value, type_void, type_value>::type _value;
+
+    std::exception_ptr _exp;
 
     explicit awaitable(coroutine_handle<promise_type> coroutine)
         : _coroutine(coroutine) { }
