@@ -7,7 +7,6 @@
 #include <queue>
 #include <chrono>
 #include <string>
-#include <iostream>
 #include <experimental/coroutine>
 
 using namespace std::chrono;
@@ -15,16 +14,21 @@ using namespace std::experimental;
 
 std::queue<coroutine_handle<>> ready_coros;
 
-std::map<std::chrono::high_resolution_clock::time_point, coroutine_handle<>> suspended_coros;
+std::multimap<std::chrono::high_resolution_clock::time_point, coroutine_handle<>> timed_wait_coros;
+
+int noutstanding = 0;
 
 template <typename T>
 class awaitable
 {
 public:
+    typedef std::reference_wrapper<awaitable> ref;
+
     awaitable() = default;
     ~awaitable() = default;
 
     explicit awaitable(bool suspend) : _suspend(suspend) {}
+    explicit awaitable(std::chrono::high_resolution_clock::duration timeout) : _timeout(timeout) {}
 
     awaitable(awaitable const&) = delete;
     awaitable& operator=(awaitable const&) = delete;
@@ -34,31 +38,32 @@ public:
         : _coroutine(other._coroutine)
         , _ready(other._ready)
         , _suspend(other._suspend)
+        , _awaiter_coro(other._awaiter_coro)
+        , _timeout(other._timeout)
     {
         other._coroutine = nullptr;
+        other._awaiter_coro = nullptr;
     }
 
     struct promise_type_void
     {
         void return_void()
         {
-            std::cout << "return_void()" << std::endl;
         }
 
-        void generic_return() {}
+        void get_value() {}
     };
 
     struct promise_type_value
     {
         T value = T{};
 
-        void return_value(T value_)
+        void return_value(T&& value_)
         {
-            std::cout << "return_value: " << value_ << std::endl;
-            value = value_;
+            value = std::move(value_);
         }
 
-        T generic_return() { return value; }
+        T get_value() { return value; }
     };
 
     struct promise_type : std::conditional<std::is_same<T, void>::value, promise_type_void, promise_type_value>::type
@@ -90,7 +95,7 @@ public:
     bool await_ready() noexcept
     {
         // if I'm enclosing a coroutine, use its status; otherwise, suspend
-        return _coroutine ? _coroutine.done() : false;
+        return _coroutine ? _coroutine.done() : _ready;
     }
 
     void await_suspend(coroutine_handle<> awaiter_coro) noexcept
@@ -98,9 +103,14 @@ public:
         if (!_coroutine)
         {
             // I'm not enclosing a coroutine while I'm awaited (await resumable_thing{};), add the awaiter's frame
-            if (_suspend)
+            if (_timeout.count() > 0)
             {
-                suspended_coros.emplace(std::chrono::high_resolution_clock::now(), awaiter_coro);
+                timed_wait_coros.emplace(std::chrono::high_resolution_clock::now() + _timeout, awaiter_coro);
+            }
+            else if (_suspend)
+            {
+                _awaiter_coro = awaiter_coro;
+                ++noutstanding;
             }
             else
             {
@@ -116,11 +126,41 @@ public:
 
     T await_resume() noexcept
     {
-        std::cout << "await_resume" << std::endl;
-        return _coroutine.promise().generic_return();
+        return _coroutine ? _coroutine.promise().get_value() : _value.get();
+    }
+
+    void set_ready()
+    {
+        if (_awaiter_coro)
+        {
+            ready_coros.push(_awaiter_coro);
+            _awaiter_coro = nullptr;
+            --noutstanding;
+        }
+        _ready = true;
+    }
+
+    template <typename U = T, typename = std::enable_if<!std::is_same<T, void>::value>::type>
+    void set_ready(U&& value)
+    {
+        _value.value = std::move(value);
+        set_ready();
     }
 
 private:
+    struct type_void
+    {
+        void get() {}
+    };
+
+    struct type_value
+    {
+        T value = T{};
+        T get() { return std::move(value); }
+    };
+
+    typename std::conditional<std::is_same<T, void>::value, type_void, type_value>::type _value;
+
     explicit awaitable(coroutine_handle<promise_type> coroutine)
         : _coroutine(coroutine) { }
 
@@ -132,5 +172,6 @@ private:
 
     bool _ready = false;
     bool _suspend = false;
+    std::chrono::high_resolution_clock::duration _timeout;
 };
 
