@@ -12,11 +12,61 @@
 using namespace std::chrono;
 using namespace std::experimental;
 
-std::queue<coroutine_handle<>> ready_coros;
+struct executor
+{
+    static auto& ready_coros()
+    {
+        static std::queue<coroutine_handle<>> s_ready_coros;
+        return s_ready_coros;
+    }
 
-std::multimap<std::chrono::high_resolution_clock::time_point, coroutine_handle<>> timed_wait_coros;
+    static auto& timed_wait_coros()
+    {
+        static std::multimap<std::chrono::high_resolution_clock::time_point, coroutine_handle<>> s_timed_wait_coros;
+        return s_timed_wait_coros;
+    }
 
-int noutstanding = 0;
+    static auto& num_outstanding_coros()
+    {
+        static int s_num_outstanding_coros = 0;
+        return s_num_outstanding_coros;
+    }
+
+    static bool tick()
+    {
+        if (!ready_coros().empty() || !timed_wait_coros().empty() || num_outstanding_coros() > 0)
+        {
+            if (!ready_coros().empty())
+            {
+                auto coro = ready_coros().front();
+                ready_coros().pop();
+
+                coro.resume();
+            }
+
+            while (!timed_wait_coros().empty())
+            {
+                auto it = timed_wait_coros().begin();
+                if (std::chrono::high_resolution_clock::now() < it->first)
+                    break;
+
+                ready_coros().push(it->second);
+                timed_wait_coros().erase(it);
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    static void loop()
+    {
+        while (tick())
+            ;
+    }
+
+};
 
 template <typename T>
 class awaitable
@@ -51,7 +101,9 @@ public:
         {
         }
 
-        void get_value() {}
+        void get_value()
+        {
+        }
     };
 
     struct promise_type_value
@@ -63,7 +115,10 @@ public:
             value = std::move(value_);
         }
 
-        T get_value() { return value; }
+        T get_value()
+        {
+            return value;
+        }
     };
 
     struct promise_type : std::conditional<std::is_same<T, void>::value, promise_type_void, promise_type_value>::type
@@ -85,7 +140,7 @@ public:
         {
             if (_awaiter_coro)
             {
-                ready_coros.push(_awaiter_coro);
+                executor::ready_coros().push(_awaiter_coro);
                 _awaiter_coro = nullptr;
             }
             return suspend_always{}; // NB: if we want to access the return value in await_resume, we need to keep the current coroutine around, even though coro.done() is now true! 
@@ -111,16 +166,16 @@ public:
             // I'm not enclosing a coroutine while I'm awaited (await resumable_thing{};), add the awaiter's frame
             if (_timeout.count() > 0)
             {
-                timed_wait_coros.emplace(std::chrono::high_resolution_clock::now() + _timeout, awaiter_coro);
+                executor::timed_wait_coros().emplace(std::chrono::high_resolution_clock::now() + _timeout, awaiter_coro);
             }
             else if (_suspend)
             {
                 _awaiter_coro = awaiter_coro;
-                ++noutstanding;
+                ++executor::num_outstanding_coros();
             }
             else
             {
-                ready_coros.push(awaiter_coro);
+                executor::ready_coros().push(awaiter_coro);
             }
         }
         else
@@ -151,9 +206,9 @@ public:
     {
         if (_awaiter_coro)
         {
-            ready_coros.push(_awaiter_coro);
+            executor::ready_coros().push(_awaiter_coro);
             _awaiter_coro = nullptr;
-            --noutstanding;
+            --executor::num_outstanding_coros();
         }
         _ready = true;
     }

@@ -17,11 +17,11 @@ awaitable<void> set_ready_after_timeout(awaitable<int>::ref awtb, std::chrono::h
 awaitable<int> named_counter(std::string name)
 {
     std::cout << "counter(" << name << ") resumed #" << 0 << std::endl;
-    co_await awaitable<void>{2s};
+    co_await awaitable<void>{2s}; // timed wait
     std::cout << "counter(" << name << ") resumed #" << 1 << std::endl;
-    int i = co_await awaitable<int>{};
+    int i = co_await awaitable<int>{}; // yield, returns the default value
     std::cout << "counter(" << name << ") resumed #" << 2 << " ### " << i << std::endl;
-    auto awtb = awaitable<int>{true};
+    auto awtb = awaitable<int>{true}; // suspend, and returns the value from somewhere else
     set_ready_after_timeout(awtb, 3s);
     auto x = co_await awtb;
     std::cout << "counter(" << name << ") resumed #" << 3 << " ### " << x << std::endl;
@@ -59,26 +59,7 @@ awaitable<void> test()
 int main()
 {
     test();
-    while (!ready_coros.empty() || !timed_wait_coros.empty() || noutstanding > 0)
-    {
-        if (!ready_coros.empty())
-        {
-            auto coro = ready_coros.front();
-            ready_coros.pop();
-
-            coro.resume();
-        }
-
-        while (!timed_wait_coros.empty())
-        {
-            auto it = timed_wait_coros.begin();
-            if (std::chrono::high_resolution_clock::now() < it->first)
-                break;
-
-            ready_coros.push(it->second);
-            timed_wait_coros.erase(it);
-        }
-    }
+    executor::loop();
     return 0;
 }
 
