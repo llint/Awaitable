@@ -6,11 +6,11 @@
 
 #include <iostream>
 
-awaitable<void> set_ready_after_timeout(awaitable<int>::ref awtb, std::chrono::high_resolution_clock::duration timeout)
+awaitable<void> set_ready_after_timeout(awaitable<int>::ref awtbl, std::chrono::high_resolution_clock::duration timeout)
 {
     co_await awaitable<void>{timeout}; // timed wait
 
-    awtb.get().set_ready(123);
+    awtbl.get().set_ready(123);
 }
 
 awaitable<int> named_counter(std::string name)
@@ -23,9 +23,9 @@ awaitable<int> named_counter(std::string name)
     int i = co_await awaitable<int>{}; // yield, returns the default value
     std::cout << "counter(" << name << ") resumed #" << 2 << " ### " << i << std::endl;
 
-    auto awtb = awaitable<int>{true}; // suspend, and returns the value from somewhere else
-    set_ready_after_timeout(awtb, 3s);
-    auto x = co_await awtb;
+    auto awtbl = awaitable<int>{true}; // suspend, and returns the value from somewhere else
+    set_ready_after_timeout(awtbl, 3s);
+    auto x = co_await awtbl;
     std::cout << "counter(" << name << ") resumed #" << 3 << " ### " << x << std::endl;
 
     co_return 42;
