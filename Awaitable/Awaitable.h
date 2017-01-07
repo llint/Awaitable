@@ -250,7 +250,7 @@ public:
 
         if (_exp)
         {
-            throw _exp;
+            std::rethrow_exception(_exp);
         }
 
         return _value.get();
@@ -277,6 +277,7 @@ public:
     void set_exception(std::exception_ptr exp)
     {
         _exp = std::move(exp);
+        set_ready();
     }
 
 private:

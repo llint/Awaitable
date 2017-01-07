@@ -13,6 +13,13 @@ awaitable<void> set_ready_after_timeout(awaitable<int>::ref awtbl, std::chrono::
     awtbl.get().set_ready(123);
 }
 
+awaitable<void> set_exception_after_timeout(awaitable<int>::ref awtbl, std::chrono::high_resolution_clock::duration timeout)
+{
+    co_await timeout;
+
+    awtbl.get().set_exception(std::make_exception_ptr(std::exception()));
+}
+
 awaitable<int> named_counter(std::string name)
 {
     std::cout << "counter(" << name << ") resumed #" << 0 << std::endl;
@@ -23,10 +30,24 @@ awaitable<int> named_counter(std::string name)
     int i = co_await awaitable<int>{}; // yield, returns the default value
     std::cout << "counter(" << name << ") resumed #" << 2 << " ### " << i << std::endl;
 
-    auto awtbl = awaitable<int>{true}; // suspend, and returns the value from somewhere else
-    set_ready_after_timeout(awtbl, 3s);
-    auto x = co_await awtbl;
-    std::cout << "counter(" << name << ") resumed #" << 3 << " ### " << x << std::endl;
+    {
+        auto awtbl = awaitable<int>{ true }; // suspend, and returns the value from somewhere else
+        set_ready_after_timeout(awtbl, 3s);
+        auto x = co_await awtbl;
+        std::cout << "counter(" << name << ") resumed #" << 3 << " ### " << x << std::endl;
+    }
+
+    try
+    {
+        auto awtbl = awaitable<int>{ true }; // suspend, and returns the value from somewhere else
+        set_exception_after_timeout(awtbl, 3s);
+        auto x = co_await awtbl;
+        std::cout << "counter(" << name << ") resumed #" << 3 << " ### " << x << std::endl;
+    }
+    catch (std::exception e)
+    {
+        std::cout << "### caught exception" << std::endl;
+    }
 
     co_return 42;
 }
