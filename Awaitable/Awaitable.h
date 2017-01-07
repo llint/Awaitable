@@ -14,6 +14,7 @@
 using namespace std::chrono;
 using namespace std::experimental;
 
+// TODO: maybe better encapsulation? singleton? so we only need to set the singleton instance to thread_local
 struct executor
 {
     static auto& ready_coros()
@@ -280,4 +281,9 @@ private:
     bool _suspend = false;
     std::chrono::high_resolution_clock::duration _timeout;
 };
+
+auto operator co_await(std::chrono::high_resolution_clock::duration duration)
+{
+    return awaitable<void>{duration};
+}
 

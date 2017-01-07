@@ -8,7 +8,7 @@
 
 awaitable<void> set_ready_after_timeout(awaitable<int>::ref awtbl, std::chrono::high_resolution_clock::duration timeout)
 {
-    co_await awaitable<void>{timeout}; // timed wait
+    co_await timeout; // timed wait
 
     awtbl.get().set_ready(123);
 }
@@ -17,7 +17,7 @@ awaitable<int> named_counter(std::string name)
 {
     std::cout << "counter(" << name << ") resumed #" << 0 << std::endl;
 
-    co_await awaitable<void>{2s}; // timed wait
+    co_await 5s; // timed wait
     std::cout << "counter(" << name << ") resumed #" << 1 << std::endl;
 
     int i = co_await awaitable<int>{}; // yield, returns the default value
@@ -33,7 +33,7 @@ awaitable<int> named_counter(std::string name)
 
 awaitable<void> test_exception()
 {
-    co_await awaitable<void>{};
+    co_await 0s;
 
     throw 0;
 
