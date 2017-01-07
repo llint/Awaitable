@@ -42,7 +42,7 @@ awaitable<int> named_counter(std::string name)
         auto awtbl = awaitable<int>{ true }; // suspend, and returns the value from somewhere else
         set_exception_after_timeout(awtbl, 3s);
         auto x = co_await awtbl;
-        std::cout << "counter(" << name << ") resumed #" << 3 << " ### " << x << std::endl;
+        std::cout << "counter(" << name << ") resumed #" << 4 << " ### " << x << std::endl;
     }
     catch (std::exception e)
     {
