@@ -61,7 +61,7 @@ awaitable<void> test()
 int main()
 {
     test();
-    executor::loop();
+    executor::singleton().loop();
     return 0;
 }
 

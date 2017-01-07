@@ -14,47 +14,55 @@
 using namespace std::chrono;
 using namespace std::experimental;
 
-// TODO: maybe better encapsulation? singleton? so we only need to set the singleton instance to thread_local
-struct executor
+class executor
 {
-    static auto& ready_coros()
+public:
+    static executor& singleton()
     {
-        thread_local static std::queue<coroutine_handle<>> s_ready_coros;
-        return s_ready_coros;
+        thread_local static executor s_singleton;
+        return s_singleton;
     }
 
-    static auto& timed_wait_coros()
+    void add_ready_coro(coroutine_handle<> coro)
     {
-        thread_local static std::multimap<std::chrono::high_resolution_clock::time_point, coroutine_handle<>> s_timed_wait_coros;
-        return s_timed_wait_coros;
+        _ready_coros.push(coro);
     }
 
-    static auto& num_outstanding_coros()
+    void add_timed_wait_coro(std::chrono::high_resolution_clock::time_point when, coroutine_handle<> coro)
     {
-        thread_local static int s_num_outstanding_coros = 0;
-        return s_num_outstanding_coros;
+        _timed_wait_coros.emplace(when, coro);
     }
 
-    static bool tick()
+    void increment_num_outstanding_coros()
     {
-        if (!ready_coros().empty() || !timed_wait_coros().empty() || num_outstanding_coros() > 0)
+        ++_num_outstanding_coros;
+    }
+
+    void decrement_num_outstanding_coros()
+    {
+        --_num_outstanding_coros;
+    }
+
+    bool tick()
+    {
+        if (!_ready_coros.empty() || !_timed_wait_coros.empty() || _num_outstanding_coros > 0)
         {
-            if (!ready_coros().empty())
+            if (!_ready_coros.empty())
             {
-                auto coro = ready_coros().front();
-                ready_coros().pop();
+                auto coro = _ready_coros.front();
+                _ready_coros.pop();
 
                 coro.resume();
             }
 
-            while (!timed_wait_coros().empty())
+            while (!_timed_wait_coros.empty())
             {
-                auto it = timed_wait_coros().begin();
+                auto it = _timed_wait_coros.begin();
                 if (std::chrono::high_resolution_clock::now() < it->first)
                     break;
 
-                ready_coros().push(it->second);
-                timed_wait_coros().erase(it);
+                _ready_coros.push(it->second);
+                _timed_wait_coros.erase(it);
             }
 
             return true;
@@ -63,12 +71,20 @@ struct executor
         return false;
     }
 
-    static void loop()
+    void loop()
     {
         while (tick())
             ;
     }
 
+private:
+    executor() = default;
+    ~executor() = default;
+
+    std::queue<coroutine_handle<>> _ready_coros;
+    std::multimap<std::chrono::high_resolution_clock::time_point, coroutine_handle<>> _timed_wait_coros;
+
+    int _num_outstanding_coros = 0;
 };
 
 template <typename T>
@@ -138,7 +154,7 @@ public:
         {
             if (_awaiter_coro)
             {
-                executor::ready_coros().push(_awaiter_coro);
+                executor::singleton().add_ready_coro(_awaiter_coro);
                 _awaiter_coro = nullptr;
             }
             return suspend_always{}; // NB: if we want to access the return value in await_resume, we need to keep the current coroutine around, even though coro.done() is now true! 
@@ -165,16 +181,16 @@ public:
 
             if (_timeout.count() > 0)
             {
-                executor::timed_wait_coros().emplace(std::chrono::high_resolution_clock::now() + _timeout, awaiter_coro);
+                executor::singleton().add_timed_wait_coro(std::chrono::high_resolution_clock::now() + _timeout, awaiter_coro);
             }
             else if (_suspend)
             {
                 _awaiter_coro = awaiter_coro;
-                ++executor::num_outstanding_coros();
+                executor::singleton().increment_num_outstanding_coros();
             }
             else
             {
-                executor::ready_coros().push(awaiter_coro);
+                executor::singleton().add_ready_coro(awaiter_coro);
             }
         }
         else
@@ -244,9 +260,9 @@ public:
     {
         if (_awaiter_coro)
         {
-            executor::ready_coros().push(_awaiter_coro);
+            executor::singleton().add_ready_coro(_awaiter_coro);
             _awaiter_coro = nullptr;
-            --executor::num_outstanding_coros();
+            executor::singleton().decrement_num_outstanding_coros();
         }
         _ready = true;
     }
