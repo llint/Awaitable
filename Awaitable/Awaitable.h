@@ -9,6 +9,8 @@
 #include <string>
 #include <experimental/coroutine>
 
+#include <cassert>
+
 using namespace std::chrono;
 using namespace std::experimental;
 
@@ -225,7 +227,7 @@ public:
             }
 
             // the coroutine is finished, but returned from final_suspend (suspend_always), so we get a chance to retrieve any exception or value
-            // _coroutine.done() == true
+            assert(_coroutine.done());
             _coroutine.destroy();
         }
 
