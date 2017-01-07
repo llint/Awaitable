@@ -16,19 +16,19 @@ struct executor
 {
     static auto& ready_coros()
     {
-        static std::queue<coroutine_handle<>> s_ready_coros;
+        thread_local static std::queue<coroutine_handle<>> s_ready_coros;
         return s_ready_coros;
     }
 
     static auto& timed_wait_coros()
     {
-        static std::multimap<std::chrono::high_resolution_clock::time_point, coroutine_handle<>> s_timed_wait_coros;
+        thread_local static std::multimap<std::chrono::high_resolution_clock::time_point, coroutine_handle<>> s_timed_wait_coros;
         return s_timed_wait_coros;
     }
 
     static auto& num_outstanding_coros()
     {
-        static int s_num_outstanding_coros = 0;
+        thread_local static int s_num_outstanding_coros = 0;
         return s_num_outstanding_coros;
     }
 
