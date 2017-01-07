@@ -246,6 +246,7 @@ public:
             // the coroutine is finished, but returned from final_suspend (suspend_always), so we get a chance to retrieve any exception or value
             assert(_coroutine.done());
             _coroutine.destroy();
+            _coroutine = nullptr;
         }
 
         if (_exp)
