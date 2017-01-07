@@ -83,7 +83,6 @@ public:
     awaitable(awaitable const&) = delete;
     awaitable& operator=(awaitable const&) = delete;
 
-    // NB: awaitable_completion_source
     awaitable(awaitable&& other)
         : _coroutine(other._coroutine)
         , _ready(other._ready)
@@ -91,37 +90,33 @@ public:
         , _awaiter_coro(other._awaiter_coro)
         , _timeout(other._timeout)
     {
+        other._timeout = 0;
+        other._ready = false;
+        other._suspend = false;
         other._coroutine = nullptr;
         other._awaiter_coro = nullptr;
     }
 
-    struct promise_type_void
+    template <typename X>
+    struct promise_type_base
+    {
+        X _value = X{};
+
+        void return_value(X&& value)
+        {
+            _value = std::move(value);
+        }
+    };
+
+    template <>
+    struct promise_type_base<void>
     {
         void return_void()
         {
         }
-
-        void get_value()
-        {
-        }
     };
 
-    struct promise_type_value
-    {
-        T value = T{};
-
-        void return_value(T&& value_)
-        {
-            value = std::move(value_);
-        }
-
-        T get_value()
-        {
-            return value;
-        }
-    };
-
-    struct promise_type : std::conditional<std::is_same<T, void>::value, promise_type_void, promise_type_value>::type
+    struct promise_type : promise_type_base<T>
     {
         awaitable get_return_object()
         {
@@ -155,7 +150,7 @@ public:
 
     bool await_ready() noexcept
     {
-        // if I'm enclosing a coroutine, use its status; otherwise, suspend
+        // if I'm enclosing a coroutine, use its status; otherwise, suspend if not ready
         return _coroutine ? _coroutine.done() : _ready;
     }
 
@@ -164,6 +159,7 @@ public:
         if (!_coroutine)
         {
             // I'm not enclosing a coroutine while I'm awaited (await resumable_thing{};), add the awaiter's frame
+
             if (_timeout.count() > 0)
             {
                 executor::timed_wait_coros().emplace(std::chrono::high_resolution_clock::now() + _timeout, awaiter_coro);
@@ -185,21 +181,60 @@ public:
         }
     }
 
+    template <typename X>
+    struct value
+    {
+        X _value = X{};
+        X get() { return std::move(_value); }
+    };
+
+    template <>
+    struct value<void>
+    {
+        void get() {}
+    };
+
+    template <typename X>
+    struct save_promise_value
+    {
+        static void apply(value<X>& v, promise_type& p)
+        {
+            v._value = std::move(p._value);
+        }
+    };
+
+    template <>
+    struct save_promise_value<void>
+    {
+        static void apply(value<void>&, promise_type&)
+        {
+        }
+    };
+
     T await_resume()
     {
         if (_coroutine)
         {
             if (_coroutine.promise()._exp)
             {
-                throw _coroutine.promise()._exp;
+                _exp = _coroutine.promise()._exp;
             }
+            else
+            {
+                save_promise_value<T>::apply(_value, _coroutine.promise());
+            }
+
+            // the coroutine is finished, but returned from final_suspend (suspend_always), so we get a chance to retrieve any exception or value
+            // _coroutine.done() == true
+            _coroutine.destroy();
         }
-        else if (_exp)
+
+        if (_exp)
         {
             throw _exp;
         }
 
-        return _coroutine ? _coroutine.promise().get_value() : _value.get();
+        return _value.get();
     }
 
     void set_ready()
@@ -216,7 +251,7 @@ public:
     template <typename U = T, typename = std::enable_if<!std::is_same<T, void>::value>::type>
     void set_ready(U&& value)
     {
-        _value.value = std::move(value);
+        _value._value = std::move(value);
         set_ready();
     }
 
@@ -226,23 +261,12 @@ public:
     }
 
 private:
-    struct type_void
-    {
-        void get() {}
-    };
-
-    struct type_value
-    {
-        T value = T{};
-        T get() { return std::move(value); }
-    };
-
-    typename std::conditional<std::is_same<T, void>::value, type_void, type_value>::type _value;
+    value<T> _value;
 
     std::exception_ptr _exp;
 
     explicit awaitable(coroutine_handle<promise_type> coroutine)
-        : _coroutine(coroutine) { }
+        : _coroutine(coroutine) {}
 
     // the coroutine this awaitable is enclosing; this is created by promise_type::get_return_object
     coroutine_handle<promise_type> _coroutine = nullptr;
