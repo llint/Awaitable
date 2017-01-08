@@ -217,6 +217,30 @@ namespace pi
         std::unordered_map<typename token::ptr, std::deque<std::function<void()>>> _registry;
     };
 
+    // NB: this class is intended for fire and forget type of coroutines
+    // specifically, final_suspend returns suspend_never, so the coroutine will end its course by itself
+    // OTOH, awaitable's final_suspend returns suspend_always, giving await_resume a chance to retrieve any return value or propagate any exception
+    struct nawaitable
+    {
+        struct promise_type
+        {
+            nawaitable get_return_object()
+            {
+                return {};
+            }
+
+            auto initial_suspend()
+            {
+                return suspend_never{};
+            }
+
+            auto final_suspend()
+            {
+                return suspend_never{};
+            }
+        };
+    };
+
     template <typename T>
     class awaitable
     {
@@ -305,7 +329,7 @@ namespace pi
                 }
             }
 
-            template <typename U = T, typename = std::enable_if<!std::is_same<T, void>::value>::type>
+            template <typename U = T, typename std::enable_if<!std::is_same<U, void>::value>::type* = nullptr>
             void set_ready(U&& value)
             {
                 auto it = registry().find(_id);
@@ -499,7 +523,7 @@ namespace pi
             _ready = true;
         }
 
-        template <typename U = T, typename = std::enable_if<!std::is_same<T, void>::value>::type>
+        template <typename U = T, typename std::enable_if<!std::is_same<U, void>::value>::type* = nullptr>
         void set_ready(U&& value)
         {
             _value._value = std::move(value);
@@ -511,6 +535,50 @@ namespace pi
             _exp = std::move(exp);
             set_ready();
         }
+
+    private:
+        template <typename U = T, typename std::enable_if<std::is_same<U, void>::value>::type* = nullptr>
+        nawaitable await_one(typename awaitable<U>::ref a, typename awaitable<U>::proxy p)
+        {
+            try
+            {
+                co_await a;
+            }
+            catch (...)
+            {
+                p.set_exception(std::current_exception());
+                return;
+            }
+
+            p.set_ready();
+        }
+
+        template <typename U = T, typename std::enable_if<!std::is_same<U, void>::value>::type* = nullptr>
+        nawaitable await_one(typename awaitable<U>::ref a, typename awaitable<U>::proxy p)
+        {
+            try
+            {
+                auto r = co_await a;
+            }
+            catch (...)
+            {
+                p.set_exception(std::current_exception());
+                return;
+            }
+
+            p.set_ready(std::move(r));
+        }
+
+    public:
+        //static awaitable when_any(std::array<awaitable::ref>& awaitables, cancellation::token ct = cancellation::token::none)
+        //{
+
+        //}
+
+        //friend awaitable operator||(awaitable& a1, awaitable& a2)
+        //{
+
+        //}
 
     private:
         typedef std::reference_wrapper<awaitable> ref;
@@ -547,30 +615,6 @@ namespace pi
         bool _ready = false;
         bool _suspend = false;
         std::chrono::high_resolution_clock::duration _timeout;
-    };
-
-    // NB: this class is intended for fire and forget type of coroutines
-    // specifically, final_suspend returns suspend_never, so the coroutine will end its course by itself
-    // OTOH, awaitable's final_suspend returns suspend_always, giving await_resume a chance to retrieve any return value or propagate any exception
-    struct nawaitable
-    {
-        struct promise_type
-        {
-            nawaitable get_return_object()
-            {
-                return {};
-            }
-
-            auto initial_suspend()
-            {
-                return suspend_never{};
-            }
-
-            auto final_suspend()
-            {
-                return suspend_never{};
-            }
-        };
     };
 
     auto operator co_await(std::chrono::high_resolution_clock::duration duration)
