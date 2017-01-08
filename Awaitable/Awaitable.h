@@ -379,7 +379,7 @@ private:
         return s_registry;
     }
 
-    int _id = 0;
+    unsigned _id = 0;
 
     value<T> _value;
 
