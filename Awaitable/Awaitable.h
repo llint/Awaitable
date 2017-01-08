@@ -7,6 +7,7 @@
 #include <queue>
 #include <chrono>
 #include <string>
+#include <unordered_map>
 #include <experimental/coroutine>
 
 #include <cassert>
@@ -91,29 +92,111 @@ template <typename T>
 class awaitable
 {
 public:
-    typedef std::reference_wrapper<awaitable> ref;
+    awaitable()
+        : _id(++current_id())
+    {
+        registry().emplace(_id, *this);
+    }
 
-    awaitable() = default;
-    ~awaitable() = default;
+    ~awaitable()
+    {
+        registry().erase(_id);
+    }
 
-    explicit awaitable(bool suspend) : _suspend(suspend) {}
-    explicit awaitable(std::chrono::high_resolution_clock::duration timeout) : _timeout(timeout) {}
+    explicit awaitable(bool suspend)
+        : _id(++current_id())
+        , _suspend(suspend)
+    {
+        registry().emplace(_id, *this);
+    }
+
+    explicit awaitable(std::chrono::high_resolution_clock::duration timeout)
+        : _id(++current_id())
+        , _timeout(timeout)
+    {
+        registry().emplace(_id, *this);
+    }
 
     awaitable(awaitable const&) = delete;
     awaitable& operator=(awaitable const&) = delete;
 
     awaitable(awaitable&& other)
-        : _coroutine(other._coroutine)
+        : _id(other._id) // copy the _id over
+        , _coroutine(other._coroutine)
         , _ready(other._ready)
         , _suspend(other._suspend)
         , _awaiter_coro(other._awaiter_coro)
         , _timeout(other._timeout)
+        , _exp(std::move(other._exp))
+        , _value(std::move(other._value))
     {
+        other._id = 0;
         other._timeout = 0;
         other._ready = false;
         other._suspend = false;
         other._coroutine = nullptr;
         other._awaiter_coro = nullptr;
+
+        auto it = registry().find(_id);
+        if (it != registry().end())
+        {
+            it->second = *this; // replace the reference in the registry, if existing
+        }
+    }
+
+    class proxy
+    {
+    public:
+        proxy(int id)
+            : _id(id)
+        {
+        }
+
+        proxy(const proxy& rhs)
+            : _id(rhs._id)
+        {
+        }
+
+        proxy& operator=(const proxy& rhs)
+        {
+            _id = rhs._id;
+        }
+
+        void set_ready()
+        {
+            auto it = registry().find(_id);
+            if (it != registry().end())
+            {
+                it->second.get().set_ready();
+            }
+        }
+
+        template <typename U = T, typename = std::enable_if<!std::is_same<T, void>::value>::type>
+        void set_ready(U&& value)
+        {
+            auto it = registry().find(_id);
+            if (it != registry().end())
+            {
+                it->second.get().set_ready(std::move(value));
+            }
+        }
+
+        void set_exception(std::exception_ptr exp)
+        {
+            auto it = registry().find(_id);
+            if (it != registry().end())
+            {
+                it->second.get().set_exception(exp);
+            }
+        }
+
+    private:
+        int _id;
+    };
+
+    proxy get_proxy() const
+    {
+        return proxy{ _id };
     }
 
     template <typename X>
@@ -282,10 +365,27 @@ public:
     }
 
 private:
+    typedef std::reference_wrapper<awaitable> ref;
+
+    static int& current_id()
+    {
+        thread_local static int s_current_id = 0;
+        return s_current_id;
+    }
+
+    static auto& registry()
+    {
+        thread_local static std::unordered_map<int, ref> s_registry;
+        return s_registry;
+    }
+
+    int _id = 0;
+
     value<T> _value;
 
     std::exception_ptr _exp;
 
+    // NB: this constructor specifically doesn't register a proxy, since proxy usage makes no sense for coroutine enclosing awaitables
     explicit awaitable(coroutine_handle<promise_type> coroutine)
         : _coroutine(coroutine) {}
 
