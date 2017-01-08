@@ -147,7 +147,7 @@ public:
     class proxy
     {
     public:
-        proxy(int id)
+        proxy(unsigned id)
             : _id(id)
         {
         }
@@ -191,7 +191,7 @@ public:
         }
 
     private:
-        int _id;
+        unsigned _id;
     };
 
     proxy get_proxy() const
@@ -375,7 +375,7 @@ private:
 
     static auto& registry()
     {
-        thread_local static std::unordered_map<int, ref> s_registry;
+        thread_local static std::unordered_map<unsigned, ref> s_registry;
         return s_registry;
     }
 
