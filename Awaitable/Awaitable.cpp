@@ -88,7 +88,7 @@ nawaitable cancel_after_timeout(cancellation& source, std::chrono::high_resoluti
     source.fire();
 }
 
-nawaitable test_cancellation(cancellation::token token)
+nawaitable test_cancellation_1(cancellation::token token)
 {
     auto awtbl = awaitable<int>{ true }; // suspend, and returns the value from somewhere else
 
@@ -101,7 +101,23 @@ nawaitable test_cancellation(cancellation::token token)
     }
     catch (std::exception e)
     {
-        std::cout << "test_cancellation: canceled!" << std::endl;
+        std::cout << "test_cancellation_1: canceled!" << std::endl;
+    }
+}
+
+nawaitable test_cancellation_2(cancellation::token token)
+{
+    auto awtbl = awaitable<void>{ 4s };
+
+    token.register_action([&awtbl] { awtbl.set_exception(std::make_exception_ptr(std::exception())); });
+
+    try
+    {
+        co_await awtbl;
+    }
+    catch (std::exception e)
+    {
+        std::cout << "test_cancellation_2: canceled!" << std::endl;
     }
 }
 
@@ -109,9 +125,11 @@ int main()
 {
     cancellation source;
     cancel_after_timeout(source, 3s);
-    test_cancellation(source.get_token());
+    test_cancellation_1(source.get_token());
+    test_cancellation_2(source.get_token());
 
     test();
+
     executor::singleton().loop();
     return 0;
 }

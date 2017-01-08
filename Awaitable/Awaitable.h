@@ -122,6 +122,7 @@ namespace pi
         int _num_outstanding_coros = 0;
     };
 
+    // NB: try keep cancellation sources in scope, and it can freely pass tokens to other coroutines without worrying about becoming dangling
     class cancellation
     {
     public:
@@ -143,6 +144,7 @@ namespace pi
             }
         }
 
+        // NB: try keep the token on the stack or in scope, it would keep effective during the course of co_await!
         class token
         {
             friend class cancellation;
@@ -247,6 +249,7 @@ namespace pi
             , _coroutine(other._coroutine)
             , _ready(other._ready)
             , _suspend(other._suspend)
+            , _when(other._when)
             , _awaiter_coro(other._awaiter_coro)
             , _timeout(other._timeout)
             , _exp(std::move(other._exp))
@@ -258,6 +261,7 @@ namespace pi
             other._suspend = false;
             other._coroutine = nullptr;
             other._awaiter_coro = nullptr;
+            other._when = std::chrono::high_resolution_clock::time_point{};
 
             auto it = registry().find(_id);
             if (it != registry().end())
@@ -271,6 +275,9 @@ namespace pi
             registry().erase(_id);
         }
 
+        // The proxy/handle class for awaitables, since awaitables could be one liner, and they could get destructed the next line after co_await
+        // With the advent of cancellation, awaitables can be cancelled earlier than they could be set ready, and if we use awaitable references,
+        // they could become dangling and referencing already destructed awaitables when they get the chance to set_ready/exception!
         class proxy
         {
         public:
@@ -391,7 +398,9 @@ namespace pi
 
                 if (_timeout.count() > 0)
                 {
-                    executor::singleton().add_timed_wait_coro(std::chrono::high_resolution_clock::now() + _timeout, awaiter_coro);
+                    _when = std::chrono::high_resolution_clock::now() + _timeout;
+                    _awaiter_coro = awaiter_coro;
+                    executor::singleton().add_timed_wait_coro(_when, _awaiter_coro);
                 }
                 else if (_suspend)
                 {
@@ -459,6 +468,9 @@ namespace pi
                 _coroutine = nullptr;
             }
 
+            _awaiter_coro = nullptr;
+            _when = std::chrono::high_resolution_clock::time_point{};
+
             if (_exp)
             {
                 std::rethrow_exception(_exp);
@@ -472,8 +484,17 @@ namespace pi
             if (_awaiter_coro)
             {
                 executor::singleton().add_ready_coro(_awaiter_coro);
+                if (_suspend)
+                {
+                    executor::singleton().decrement_num_outstanding_coros();
+                }
+                else
+                {
+                    executor::singleton().remove_timed_wait_coro(_when, _awaiter_coro);
+                }
+
                 _awaiter_coro = nullptr;
-                executor::singleton().decrement_num_outstanding_coros();
+                _when = std::chrono::high_resolution_clock::time_point{};
             }
             _ready = true;
         }
@@ -521,6 +542,7 @@ namespace pi
 
         // the awaiter coroutine when this awaitable is a primitive - i.e. it doesn't enclose a coroutine, set only when _coroutine is nullptr!
         coroutine_handle<> _awaiter_coro = nullptr;
+        std::chrono::high_resolution_clock::time_point _when;
 
         bool _ready = false;
         bool _suspend = false;
