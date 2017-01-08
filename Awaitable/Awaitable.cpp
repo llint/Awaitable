@@ -6,6 +6,8 @@
 
 #include <iostream>
 
+using namespace pi;
+
 nawaitable set_ready_after_timeout(awaitable<int>::proxy awtbl, std::chrono::high_resolution_clock::duration timeout)
 {
     co_await timeout; // timed wait
