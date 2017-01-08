@@ -245,6 +245,8 @@ namespace pi
     class awaitable
     {
     public:
+        typedef std::reference_wrapper<awaitable> ref;
+
         awaitable()
             : _id(++current_id())
         {
@@ -280,7 +282,7 @@ namespace pi
             , _value(std::move(other._value))
         {
             other._id = 0;
-            other._timeout = 0;
+            other._timeout = 0s;
             other._ready = false;
             other._suspend = false;
             other._coroutine = nullptr;
@@ -538,11 +540,13 @@ namespace pi
 
     private:
         template <typename U = T, typename std::enable_if<std::is_same<U, void>::value>::type* = nullptr>
-        nawaitable await_one(typename awaitable<U>::ref a, typename awaitable<U>::proxy p)
+        static nawaitable await_one(typename awaitable<U>::ref a, typename awaitable<U>::proxy p, cancellation::token ct = cancellation::token::none())
         {
+            ct.register_action([a] { a.get().set_exception(std::make_exception_ptr(std::exception())); });
+
             try
             {
-                co_await a;
+                co_await a.get();
             }
             catch (...)
             {
@@ -554,11 +558,14 @@ namespace pi
         }
 
         template <typename U = T, typename std::enable_if<!std::is_same<U, void>::value>::type* = nullptr>
-        nawaitable await_one(typename awaitable<U>::ref a, typename awaitable<U>::proxy p)
+        static nawaitable await_one(typename awaitable<U>::ref a, typename awaitable<U>::proxy p, cancellation::token ct = cancellation::token::none())
         {
+            // NB: the cancellation token will remain in scope until the current function returns
+            ct.register_action([a] { a.get().set_exception(std::make_exception_ptr(std::exception())); });
+
             try
             {
-                auto r = co_await a;
+                auto r = co_await a.get();
             }
             catch (...)
             {
@@ -570,19 +577,30 @@ namespace pi
         }
 
     public:
-        //static awaitable when_any(std::array<awaitable::ref>& awaitables, cancellation::token ct = cancellation::token::none)
-        //{
+        static awaitable when_any(std::deque<typename awaitable::ref>& awaitables, cancellation::token ct = cancellation::token::none())
+        {
+            awaitable r = awaitable{ true };
 
-        //}
+            for (auto a : awaitables)
+            {
+                // NB: cannot register the cancellation action here, since we cannot maintain the call frame here
+                // the cancellation token will be destructed when this function goes out of scope even before await_one ends
+                // thus unregisters the registered action!
+                await_one(a, r.get_proxy(), ct);
+            }
 
-        //friend awaitable operator||(awaitable& a1, awaitable& a2)
-        //{
+            return r;
+        }
 
-        //}
+        friend awaitable operator||(typename awaitable::ref a1, typename awaitable::ref a2)
+        {
+            awaitable r = awaitable{ true };
+            await_one(a1, r.get_proxy());
+            await_one(a2, r.get_proxy());
+            return r;
+        }
 
     private:
-        typedef std::reference_wrapper<awaitable> ref;
-
         static int& current_id()
         {
             thread_local static int s_current_id = 0;
