@@ -98,11 +98,6 @@ public:
         registry().emplace(_id, *this);
     }
 
-    ~awaitable()
-    {
-        registry().erase(_id);
-    }
-
     explicit awaitable(bool suspend)
         : _id(++current_id())
         , _suspend(suspend)
@@ -142,6 +137,11 @@ public:
         {
             it->second = *this; // replace the reference in the registry, if existing
         }
+    }
+
+    ~awaitable()
+    {
+        registry().erase(_id);
     }
 
     class proxy
