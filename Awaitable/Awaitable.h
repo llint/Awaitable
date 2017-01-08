@@ -405,3 +405,27 @@ auto operator co_await(std::chrono::high_resolution_clock::duration duration)
     return awaitable<void>{duration};
 }
 
+// NB: this class is intended for fire and forget type of coroutines
+// specifically, final_suspend returns suspend_never, so the coroutine will end its course by itself
+// OTOH, awaitable's final_suspend returns suspend_always, giving await_resume a chance to retrieve any return value or propagate any exception
+struct nawaitable
+{
+    struct promise_type
+    {
+        nawaitable get_return_object()
+        {
+            return {};
+        }
+
+        auto initial_suspend()
+        {
+            return suspend_never{};
+        }
+
+        auto final_suspend()
+        {
+            return suspend_never{};
+        }
+    };
+};
+

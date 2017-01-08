@@ -6,14 +6,14 @@
 
 #include <iostream>
 
-awaitable<void> set_ready_after_timeout(awaitable<int>::proxy awtbl, std::chrono::high_resolution_clock::duration timeout)
+nawaitable set_ready_after_timeout(awaitable<int>::proxy awtbl, std::chrono::high_resolution_clock::duration timeout)
 {
     co_await timeout; // timed wait
 
     awtbl.set_ready(123);
 }
 
-awaitable<void> set_exception_after_timeout(awaitable<int>::proxy awtbl, std::chrono::high_resolution_clock::duration timeout)
+nawaitable set_exception_after_timeout(awaitable<int>::proxy awtbl, std::chrono::high_resolution_clock::duration timeout)
 {
     co_await timeout;
 
@@ -61,7 +61,7 @@ awaitable<void> test_exception()
     std::cout << "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" << std::endl;
 }
 
-awaitable<void> test()
+nawaitable test()
 {
     try
     {
