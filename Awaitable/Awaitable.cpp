@@ -79,8 +79,36 @@ nawaitable test()
     std::cout << "### after co_await named_counter(y): " << y << std::endl;
 }
 
+nawaitable cancel_after_timeout(cancellation& source, std::chrono::high_resolution_clock::duration timeout)
+{
+    co_await timeout;
+
+    source.fire();
+}
+
+nawaitable test_cancellation(cancellation::token token)
+{
+    auto awtbl = awaitable<int>{ true }; // suspend, and returns the value from somewhere else
+
+    // NB: I rely on the fact that awtbl stays on the stack, so I can capture it by reference
+    token.register_action([&awtbl] { awtbl.set_exception(std::make_exception_ptr(std::exception())); });
+
+    try
+    {
+        auto x = co_await awtbl;
+    }
+    catch (std::exception e)
+    {
+        std::cout << "test_cancellation: canceled!" << std::endl;
+    }
+}
+
 int main()
 {
+    cancellation source;
+    cancel_after_timeout(source, 3s);
+    test_cancellation(source.get_token());
+
     test();
     executor::singleton().loop();
     return 0;
