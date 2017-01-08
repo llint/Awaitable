@@ -7,6 +7,7 @@
 #include <queue>
 #include <chrono>
 #include <string>
+#include <functional>
 #include <unordered_map>
 #include <experimental/coroutine>
 
@@ -86,6 +87,99 @@ private:
     std::multimap<std::chrono::high_resolution_clock::time_point, coroutine_handle<>> _timed_wait_coros;
 
     int _num_outstanding_coros = 0;
+};
+
+class cancellation
+{
+public:
+    typedef cancellation* ptr;
+
+    cancellation() = default;
+    ~cancellation() = default;
+
+    cancellation(const cancellation&) = delete;
+    cancellation& operator=(const cancellation&) = delete;
+
+    cancellation(cancellation&& other)
+        : _registry(std::move(other._registry))
+    {
+        // as we moved the registry, we need to make sure that the cancellation source for all the tokens is updated
+        for (auto& entry : _registry)
+        {
+            entry.first->_source = this;
+        }
+    }
+
+    class token
+    {
+        friend class cancellation;
+
+    public:
+        typedef token* ptr;
+
+        token(cancellation::ptr source = nullptr)
+            : _source(source)
+        {
+        }
+
+        // token cannot be moved; when copied, the new copy will appear as a new entry in the registry, if ever being used to register new actions
+        token(const token& other)
+            : _source(other._source)
+        {
+        }
+
+        void register_action(std::function<void()>&& f)
+        {
+            if (_source)
+            {
+                auto r = _source->_registry.emplace(this, std::deque<std::function<void()>>{});
+                r.first->second.emplace_back(std::move(f));
+            }
+        }
+
+        void unregister()
+        {
+            if (_source)
+            {
+                _source->_registry.erase(this);
+            }
+        }
+
+        ~token()
+        {
+            unregister();
+        }
+
+        static token& none()
+        {
+            static token s_none;
+            return s_none;
+        }
+
+    private:
+        typename cancellation::ptr _source;
+    };
+
+    token get_token()
+    {
+        return {this};
+    }
+
+    void fire()
+    {
+        for (auto& entry : _registry)
+        {
+            for (auto& f : entry.second)
+            {
+                f();
+            }
+        }
+
+        _registry.clear();
+    }
+
+private:
+    std::unordered_map<typename token::ptr, std::deque<std::function<void()>>> _registry;
 };
 
 template <typename T>
