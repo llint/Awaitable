@@ -83,11 +83,11 @@ nawaitable test()
     }
 
     {
-        auto a1 = awaitable<void>{ 3s };
+        auto a1 = awaitable<void>{ 5s };
         auto a2 = awaitable<void>{ 4s };
         std::deque<awaitable<void>::ref> as{ a1, a2 };
         auto ar = co_await awaitable<void>::when_any(as);
-        assert(ar == a1);
+        assert(ar == a2);
         std::cout << "co_await awaitable<void>::when_any(as)" << std::endl;
     }
 
