@@ -77,7 +77,8 @@ nawaitable test()
     {
         auto a1 = awaitable<void>{ 3s };
         auto a2 = awaitable<void>{ 4s };
-        co_await(a1 || a2);
+        auto ar = co_await(a1 || a2);
+        assert(ar == a1);
         std::cout << "co_await (a1 || a2)" << std::endl;
     }
 
@@ -85,7 +86,8 @@ nawaitable test()
         auto a1 = awaitable<void>{ 3s };
         auto a2 = awaitable<void>{ 4s };
         std::deque<awaitable<void>::ref> as{ a1, a2 };
-        co_await awaitable<void>::when_any(as);
+        auto ar = co_await awaitable<void>::when_any(as);
+        assert(ar == a1);
         std::cout << "co_await awaitable<void>::when_any(as)" << std::endl;
     }
 

@@ -31,6 +31,32 @@ namespace std
 
 namespace pi
 {
+    // this reference_wrapper is default constructible, and equality comparable!
+    template <class T>
+    class reference_wrapper {
+    public:
+        // types
+        typedef T type;
+
+        reference_wrapper() : _ptr(nullptr) {}
+        // construct/copy/destroy
+        reference_wrapper(T& ref) noexcept : _ptr(std::addressof(ref)) {}
+        reference_wrapper(T&&) = delete;
+        reference_wrapper(const reference_wrapper&) noexcept = default;
+
+        // assignment
+        reference_wrapper& operator=(const reference_wrapper& x) noexcept = default;
+
+        // access
+        operator T& () const noexcept { return *_ptr; }
+        T& get() const noexcept { return *_ptr; }
+
+        bool operator==(const reference_wrapper& other) const noexcept { return _ptr == other._ptr; }
+
+    private:
+        T* _ptr;
+    };
+
     class executor
     {
     public:
@@ -245,7 +271,7 @@ namespace pi
     class awaitable
     {
     public:
-        typedef std::reference_wrapper<awaitable> ref;
+        typedef reference_wrapper<awaitable> ref;
 
         awaitable()
             : _id(++current_id())
@@ -539,9 +565,10 @@ namespace pi
         }
 
     private:
-        template <typename U = T, typename std::enable_if<std::is_same<U, void>::value>::type* = nullptr>
-        static nawaitable await_one(typename awaitable<U>::ref a, typename awaitable<U>::proxy p, cancellation::token ct = cancellation::token::none())
+        template < template <typename> class _awaitable >
+        static nawaitable await_one(reference_wrapper<_awaitable<T>> a, typename awaitable<reference_wrapper<_awaitable<T>>>::proxy p, cancellation::token ct = cancellation::token::none())
         {
+            // NB: the cancellation token will remain in scope until the current function returns
             ct.register_action([a] { a.get().set_exception(std::make_exception_ptr(std::exception())); });
 
             try
@@ -554,32 +581,13 @@ namespace pi
                 return;
             }
 
-            p.set_ready();
-        }
-
-        template <typename U = T, typename std::enable_if<!std::is_same<U, void>::value>::type* = nullptr>
-        static nawaitable await_one(typename awaitable<U>::ref a, typename awaitable<U>::proxy p, cancellation::token ct = cancellation::token::none())
-        {
-            // NB: the cancellation token will remain in scope until the current function returns
-            ct.register_action([a] { a.get().set_exception(std::make_exception_ptr(std::exception())); });
-
-            try
-            {
-                auto r = co_await a.get();
-            }
-            catch (...)
-            {
-                p.set_exception(std::current_exception());
-                return;
-            }
-
-            p.set_ready(std::move(r));
+            p.set_ready(a);
         }
 
     public:
-        static awaitable when_any(std::deque<typename awaitable::ref>& awaitables, cancellation::token ct = cancellation::token::none())
+        static awaitable<ref> when_any(std::deque<ref>& awaitables, cancellation::token ct = cancellation::token::none())
         {
-            awaitable r = awaitable{ true };
+            awaitable<ref> r = awaitable<ref>{ true };
 
             for (auto a : awaitables)
             {
@@ -592,9 +600,9 @@ namespace pi
             return r;
         }
 
-        friend awaitable operator||(typename awaitable::ref a1, typename awaitable::ref a2)
+        friend awaitable<ref> operator||(typename awaitable::ref a1, typename awaitable::ref a2)
         {
-            awaitable r = awaitable{ true };
+            awaitable<ref> r = awaitable<ref>{ true };
             await_one(a1, r.get_proxy());
             await_one(a2, r.get_proxy());
             return r;
