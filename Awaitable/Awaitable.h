@@ -31,23 +31,23 @@ namespace std
 
 namespace pi
 {
-    // NB: nullable_reference is default constructible, and equality comparable!
+    // NB: reference is default constructible, and equality comparable!
     template <class T>
-    class nullable_reference {
+    class reference {
     public:
         typedef T type;
 
-        nullable_reference() : _ptr(nullptr) {}
-        nullable_reference(T& ref) noexcept : _ptr(std::addressof(ref)) {}
-        nullable_reference(T&&) = delete;
-        nullable_reference(const nullable_reference&) noexcept = default;
+        reference() : _ptr(nullptr) {}
+        reference(T& ref) noexcept : _ptr(std::addressof(ref)) {}
+        reference(T&&) = delete;
+        reference(const reference&) noexcept = default;
 
-        nullable_reference& operator=(const nullable_reference& x) noexcept = default;
+        reference& operator=(const reference& x) noexcept = default;
 
         operator T& () const noexcept { return *_ptr; }
         T& get() const noexcept { return *_ptr; }
 
-        bool operator==(const nullable_reference& other) const noexcept { return _ptr == other._ptr; }
+        bool operator==(const reference& other) const noexcept { return _ptr == other._ptr; }
 
     private:
         T* _ptr;
@@ -267,7 +267,7 @@ namespace pi
     class awaitable
     {
     public:
-        typedef nullable_reference<awaitable> ref;
+        typedef reference<awaitable> ref;
 
         awaitable()
             : _id(++current_id())
@@ -563,7 +563,7 @@ namespace pi
     private:
         // NB: use of template template parameter is to avoid recursive template instantiation when retrieving the proxy type!
         template < template <typename> class _awaitable >
-        static nawaitable await_one(nullable_reference<_awaitable<T>> a, typename awaitable<nullable_reference<_awaitable<T>>>::proxy p, cancellation::token ct = cancellation::token::none())
+        static nawaitable await_one(reference<_awaitable<T>> a, typename awaitable<reference<_awaitable<T>>>::proxy p, cancellation::token ct = cancellation::token::none())
         {
             // NB: the cancellation token will remain in scope until the current function returns
             ct.register_action([a] { a.get().set_exception(std::make_exception_ptr(std::exception())); });
