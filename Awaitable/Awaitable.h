@@ -581,7 +581,7 @@ namespace pi
             p.set_ready(a);
         }
 
-        static nawaitable await_one(typename awaitable::ref a, typename awaitable<void>::proxy p, unsigned& count = 0, cancellation::token ct = cancellation::token::none())
+        static nawaitable await_one(ref a, typename awaitable<void>::proxy p, unsigned& count = 0, cancellation::token ct = cancellation::token::none())
         {
             // NB: the cancellation token will remain in scope until the current function returns
             ct.register_action([a] { a.get().set_exception(std::make_exception_ptr(std::exception())); });
