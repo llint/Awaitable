@@ -31,27 +31,23 @@ namespace std
 
 namespace pi
 {
-    // this reference_wrapper is default constructible, and equality comparable!
+    // NB: nullable_reference is default constructible, and equality comparable!
     template <class T>
-    class reference_wrapper {
+    class nullable_reference {
     public:
-        // types
         typedef T type;
 
-        reference_wrapper() : _ptr(nullptr) {}
-        // construct/copy/destroy
-        reference_wrapper(T& ref) noexcept : _ptr(std::addressof(ref)) {}
-        reference_wrapper(T&&) = delete;
-        reference_wrapper(const reference_wrapper&) noexcept = default;
+        nullable_reference() : _ptr(nullptr) {}
+        nullable_reference(T& ref) noexcept : _ptr(std::addressof(ref)) {}
+        nullable_reference(T&&) = delete;
+        nullable_reference(const nullable_reference&) noexcept = default;
 
-        // assignment
-        reference_wrapper& operator=(const reference_wrapper& x) noexcept = default;
+        nullable_reference& operator=(const nullable_reference& x) noexcept = default;
 
-        // access
         operator T& () const noexcept { return *_ptr; }
         T& get() const noexcept { return *_ptr; }
 
-        bool operator==(const reference_wrapper& other) const noexcept { return _ptr == other._ptr; }
+        bool operator==(const nullable_reference& other) const noexcept { return _ptr == other._ptr; }
 
     private:
         T* _ptr;
@@ -271,7 +267,7 @@ namespace pi
     class awaitable
     {
     public:
-        typedef reference_wrapper<awaitable> ref;
+        typedef nullable_reference<awaitable> ref;
 
         awaitable()
             : _id(++current_id())
@@ -567,7 +563,7 @@ namespace pi
     private:
         // NB: use of template template parameter is to avoid recursive template instantiation when retrieving the proxy type!
         template < template <typename> class _awaitable >
-        static nawaitable await_one(reference_wrapper<_awaitable<T>> a, typename awaitable<reference_wrapper<_awaitable<T>>>::proxy p, cancellation::token ct = cancellation::token::none())
+        static nawaitable await_one(nullable_reference<_awaitable<T>> a, typename awaitable<nullable_reference<_awaitable<T>>>::proxy p, cancellation::token ct = cancellation::token::none())
         {
             // NB: the cancellation token will remain in scope until the current function returns
             ct.register_action([a] { a.get().set_exception(std::make_exception_ptr(std::exception())); });
