@@ -581,10 +581,31 @@ namespace pi
             p.set_ready(a);
         }
 
+        static nawaitable await_one(typename awaitable::ref a, typename awaitable<void>::proxy p, unsigned& count = 0, cancellation::token ct = cancellation::token::none())
+        {
+            // NB: the cancellation token will remain in scope until the current function returns
+            ct.register_action([a] { a.get().set_exception(std::make_exception_ptr(std::exception())); });
+
+            try
+            {
+                co_await a.get();
+            }
+            catch (...)
+            {
+                p.set_exception(std::current_exception());
+                return;
+            }
+
+            if (count > 0 && --count == 0)
+            {
+                p.set_ready();
+            }
+        }
+
     public:
         static awaitable<ref> when_any(std::deque<ref>& awaitables, cancellation::token ct = cancellation::token::none())
         {
-            awaitable<ref> r = awaitable<ref>{ true };
+            awaitable<ref> r{ true };
 
             for (auto a : awaitables)
             {
@@ -597,12 +618,36 @@ namespace pi
             return r;
         }
 
-        friend awaitable<ref> operator||(typename awaitable::ref a1, typename awaitable::ref a2)
+        friend awaitable<ref> operator||(ref a1, ref a2)
         {
-            awaitable<ref> r = awaitable<ref>{ true };
+            awaitable<ref> r{ true };
             await_one(a1, r.get_proxy());
             await_one(a2, r.get_proxy());
             return r;
+        }
+
+        static awaitable<void> when_all(std::deque<ref>& awaitables, cancellation::token ct = cancellation::token::none())
+        {
+            awaitable<void> r{ true };
+
+            unsigned count = awaitables.size(); // NB: count remains on the stack due to the co_await below
+            for (auto a : awaitables)
+            {
+                await_one(a, r.get_proxy(), count, ct);
+            }
+
+            co_await r;
+        }
+
+        friend awaitable<void> operator&&(ref a1, ref a2)
+        {
+            awaitable<void> r{ true };
+
+            unsigned count = 2; // NB: count remains on the stack due to the co_await below
+            await_one(a1, r.get_proxy(), count);
+            await_one(a2, r.get_proxy(), count);
+
+            co_await r;
         }
 
     private:

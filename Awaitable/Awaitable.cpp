@@ -91,6 +91,21 @@ nawaitable test()
         std::cout << "co_await awaitable<void>::when_any(as)" << std::endl;
     }
 
+    {
+        auto a1 = awaitable<void>{ 3s };
+        auto a2 = awaitable<void>{ 4s };
+        co_await(a1 && a2);
+        std::cout << "co_await (a1 && a2)" << std::endl;
+    }
+
+    {
+        auto a1 = awaitable<void>{ 5s };
+        auto a2 = awaitable<void>{ 4s };
+        std::deque<awaitable<void>::ref> as{ a1, a2 };
+        co_await awaitable<void>::when_all(as);
+        std::cout << "co_await awaitable<void>::when_all(as)" << std::endl;
+    }
+
     auto x = co_await named_counter("x");
     std::cout << "### after co_await named_counter(x): " << x << std::endl;
 
