@@ -565,6 +565,7 @@ namespace pi
         }
 
     private:
+        // NB: use of template template parameter is to avoid recursive template instantiation when retrieving the proxy type!
         template < template <typename> class _awaitable >
         static nawaitable await_one(reference_wrapper<_awaitable<T>> a, typename awaitable<reference_wrapper<_awaitable<T>>>::proxy p, cancellation::token ct = cancellation::token::none())
         {
