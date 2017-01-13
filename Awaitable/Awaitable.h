@@ -37,7 +37,7 @@ namespace pi
     public:
         typedef T type;
 
-        reference() : _ptr(nullptr) {}
+        reference() noexcept : _ptr(nullptr) {}
         reference(T& ref) noexcept : _ptr(std::addressof(ref)) {}
         reference(T&&) = delete;
         reference(const reference&) noexcept = default;
