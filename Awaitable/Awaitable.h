@@ -471,13 +471,13 @@ namespace pi
         struct value
         {
             X _value = X{};
-            X get() { return std::move(_value); }
+            X move() { return std::move(_value); }
         };
 
         template <>
         struct value<void>
         {
-            void get() {}
+            void move() {}
         };
 
         template <typename X>
@@ -524,7 +524,7 @@ namespace pi
                 std::rethrow_exception(_exp);
             }
 
-            return _value.get();
+            return _value.move();
         }
 
         void set_ready()
@@ -581,6 +581,46 @@ namespace pi
             p.set_ready(a);
         }
 
+        // NB: use of template template parameter is to avoid recursive template instantiation when retrieving the proxy type!
+        template < template <typename> class _awaitable >
+        static nawaitable await_one(reference<awaitable<reference<_awaitable<T>>>> a, typename awaitable<reference<_awaitable<T>>>::proxy p, cancellation::token ct = cancellation::token::none())
+        {
+            // NB: the cancellation token will remain in scope until the current function returns
+            ct.register_action([a] { a.get().set_exception(std::make_exception_ptr(std::exception())); });
+
+            try
+            {
+                co_await a.get();
+            }
+            catch (...)
+            {
+                p.set_exception(std::current_exception());
+                return;
+            }
+
+            p.set_ready(a.get().get_value().move());
+        }
+
+        // NB: use of template template parameter is to avoid recursive template instantiation when retrieving the proxy type!
+        template < template <typename> class _awaitable >
+        static nawaitable await_one(awaitable<reference<_awaitable<T>>> a, typename awaitable<reference<_awaitable<T>>>::proxy p, cancellation::token ct = cancellation::token::none())
+        {
+            // NB: the cancellation token will remain in scope until the current function returns
+            ct.register_action([&a] { a.set_exception(std::make_exception_ptr(std::exception())); });
+
+            try
+            {
+                co_await a;
+            }
+            catch (...)
+            {
+                p.set_exception(std::current_exception());
+                return;
+            }
+
+            p.set_ready(a.get_value()._value);
+        }
+
         static nawaitable await_one(ref a, typename awaitable<void>::proxy p, unsigned& count = 0, cancellation::token ct = cancellation::token::none())
         {
             // NB: the cancellation token will remain in scope until the current function returns
@@ -602,6 +642,27 @@ namespace pi
             }
         }
 
+        //static nawaitable await_one(awaitable a, typename awaitable<void>::proxy p, unsigned& count = 0, cancellation::token ct = cancellation::token::none())
+        //{
+        //    // NB: the cancellation token will remain in scope until the current function returns
+        //    ct.register_action([&a] { a.set_exception(std::make_exception_ptr(std::exception())); });
+
+        //    try
+        //    {
+        //        co_await a;
+        //    }
+        //    catch (...)
+        //    {
+        //        p.set_exception(std::current_exception());
+        //        return;
+        //    }
+
+        //    if (count > 0 && --count == 0)
+        //    {
+        //        p.set_ready();
+        //    }
+        //}
+
     public:
         static awaitable<ref> when_any(std::deque<ref>& awaitables, cancellation::token ct = cancellation::token::none())
         {
@@ -619,6 +680,22 @@ namespace pi
         }
 
         friend awaitable<ref> operator||(ref a1, ref a2)
+        {
+            awaitable<ref> r{ true };
+            await_one(a1, r.get_proxy());
+            await_one(a2, r.get_proxy());
+            return r;
+        }
+
+        friend awaitable<ref> operator||(awaitable<ref> a1, ref a2)
+        {
+            awaitable<ref> r{ true };
+            await_one(std::move(a1), r.get_proxy());
+            await_one(a2, r.get_proxy());
+            return r;
+        }
+
+        friend awaitable<ref> operator||(reference<awaitable<ref>> a1, ref a2)
         {
             awaitable<ref> r{ true };
             await_one(a1, r.get_proxy());
@@ -650,6 +727,28 @@ namespace pi
             co_await r;
         }
 
+        //friend awaitable<void> operator&&(awaitable a1, ref a2)
+        //{
+        //    awaitable<void> r{ true };
+
+        //    unsigned count = 2; // NB: count remains on the stack due to the co_await below
+        //    await_one(a1, r.get_proxy(), count);
+        //    await_one(a2, r.get_proxy(), count);
+
+        //    co_await r;
+        //}
+
+        //friend awaitable<void> operator&&(awaitable<void> a1, ref a2)
+        //{
+        //    awaitable<void> r{ true };
+
+        //    unsigned count = 2; // NB: count remains on the stack due to the co_await below
+        //    await_one(a1, r.get_proxy(), count);
+        //    await_one(a2, r.get_proxy(), count);
+
+        //    co_await r;
+        //}
+
     private:
         static int& current_id()
         {
@@ -665,6 +764,13 @@ namespace pi
 
         unsigned _id = 0;
 
+    public:
+        value<T>& get_value()
+        {
+            return _value;
+        }
+
+    private:
         value<T> _value;
 
         std::exception_ptr _exp;

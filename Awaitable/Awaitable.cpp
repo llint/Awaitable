@@ -77,7 +77,8 @@ nawaitable test()
     {
         auto a1 = awaitable<void>{ 3s };
         auto a2 = awaitable<void>{ 4s };
-        auto ar = co_await(a1 || a2);
+        auto a3 = awaitable<void>{ 5s };
+        auto ar = co_await (a1 || a2 || a3);
         assert(ar == a1);
         std::cout << "co_await (a1 || a2)" << std::endl;
     }
@@ -94,6 +95,7 @@ nawaitable test()
     {
         auto a1 = awaitable<void>{ 3s };
         auto a2 = awaitable<void>{ 4s };
+        auto a3 = awaitable<void>{ 5s };
         co_await(a1 && a2);
         std::cout << "co_await (a1 && a2)" << std::endl;
     }
