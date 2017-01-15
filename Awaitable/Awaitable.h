@@ -421,6 +421,7 @@ namespace pi
                 {
                     executor::singleton().add_ready_coro(_awaiter_coro);
                     _awaiter_coro = nullptr;
+                    executor::singleton().decrement_num_outstanding_coros();
                 }
                 return suspend_always{}; // NB: if we want to access the return value in await_resume, we need to keep the current coroutine around, even though coro.done() is now true! 
             }
@@ -464,6 +465,7 @@ namespace pi
             {
                 // I'm waiting for some other coroutine to finish, the awaiter's frame can only be queued until my awaited one finishes
                 _coroutine.promise()._awaiter_coro = awaiter_coro;
+                executor::singleton().increment_num_outstanding_coros();
             }
         }
 

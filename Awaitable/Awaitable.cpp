@@ -63,8 +63,23 @@ awaitable<void> test_exception()
     std::cout << "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" << std::endl;
 }
 
+nawaitable test_multi_await(awaitable<int>::ref a, const std::string& name)
+{
+    co_await a.get();
+
+    std::cout << "### test_multi_await: " << name << std::endl;
+}
+
 nawaitable test()
 {
+    //{
+    //    auto a = awaitable<int>{ true };
+    //    set_ready_after_timeout(a.get_proxy(), 3s);
+    //    test_multi_await(a, "A");
+    //    test_multi_await(a, "B");
+    //    co_await a;
+    //}
+
     try
     {
         co_await test_exception();
