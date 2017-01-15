@@ -75,10 +75,12 @@ nawaitable test()
     }
 
     {
-        auto a1 = awaitable<void>{ 3s };
-        auto a2 = awaitable<void>{ 4s };
-        auto a3 = awaitable<void>{ 5s };
-        auto ar = co_await (a1 || a2 || a3);
+        // NB: it doesn't make sense to chain temporary awaitables with operator||, because the return value must be referencing one of the input awaitables
+        auto a1 = awaitable<int>{ 3s };
+        auto a2 = awaitable<int>{ 4s };
+        auto a3 = awaitable<int>{ 5s };
+        auto a4 = awaitable<int>{ 6s };
+        auto ar = co_await (a2 || a3 || a1 || a4);
         assert(ar == a1);
         std::cout << "co_await (a1 || a2)" << std::endl;
     }
@@ -93,10 +95,11 @@ nawaitable test()
     }
 
     {
-        auto a1 = awaitable<void>{ 3s };
-        auto a2 = awaitable<void>{ 4s };
-        auto a3 = awaitable<void>{ 5s };
-        co_await(a1 && a2);
+        auto a1 = awaitable<int>{ 3s };
+        auto a2 = awaitable<int>{ 4s };
+        auto a3 = awaitable<int>{ 5s };
+        co_await (a1 && a2);
+        co_await (awaitable<int>{3s} && a3);
         std::cout << "co_await (a1 && a2)" << std::endl;
     }
 

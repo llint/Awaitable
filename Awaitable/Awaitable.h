@@ -642,26 +642,26 @@ namespace pi
             }
         }
 
-        //static nawaitable await_one(awaitable a, typename awaitable<void>::proxy p, unsigned& count = 0, cancellation::token ct = cancellation::token::none())
-        //{
-        //    // NB: the cancellation token will remain in scope until the current function returns
-        //    ct.register_action([&a] { a.set_exception(std::make_exception_ptr(std::exception())); });
+        static nawaitable await_one(awaitable a, typename awaitable<void>::proxy p, unsigned& count = 0, cancellation::token ct = cancellation::token::none())
+        {
+            // NB: the cancellation token will remain in scope until the current function returns
+            ct.register_action([&a] { a.set_exception(std::make_exception_ptr(std::exception())); });
 
-        //    try
-        //    {
-        //        co_await a;
-        //    }
-        //    catch (...)
-        //    {
-        //        p.set_exception(std::current_exception());
-        //        return;
-        //    }
+            try
+            {
+                co_await a;
+            }
+            catch (...)
+            {
+                p.set_exception(std::current_exception());
+                return;
+            }
 
-        //    if (count > 0 && --count == 0)
-        //    {
-        //        p.set_ready();
-        //    }
-        //}
+            if (count > 0 && --count == 0)
+            {
+                p.set_ready();
+            }
+        }
 
     public:
         static awaitable<ref> when_any(std::deque<ref>& awaitables, cancellation::token ct = cancellation::token::none())
@@ -727,7 +727,29 @@ namespace pi
             co_await r;
         }
 
-        //friend awaitable<void> operator&&(awaitable a1, ref a2)
+    private:
+        static awaitable<void> operator_and(awaitable a1, ref a2)
+        {
+            awaitable<void> r{ true };
+
+            unsigned count = 2; // NB: count remains on the stack due to the co_await below
+            await_one(std::move(a1), r.get_proxy(), count);
+            await_one(a2, r.get_proxy(), count);
+
+            co_await r;
+        }
+
+    public:
+        // NB: awaitable&& will bind to an rvalue, while ref will bind to an lvalue
+        friend awaitable<void> operator&&(awaitable&& a1, ref a2)
+        {
+            // NB: the reason we need to wrap it to operator_and is that a coroutine doesn't like rvalue reference (lvalue reference seems to be fine)
+            // operator_and is a coroutine, and we make it happy by converting the rvalue reference to an lvalue - could this become a pattern?
+            return operator_and(std::move(a1), a2);
+        }
+
+        //template <typename V = void, typename U = T, typename std::enable_if<std::is_same<V, void>::value && !std::is_same<U, void>::value>::type* = nullptr>
+        //static awaitable<void> operator_and(awaitable<V> a1, reference<awaitable<U>> a2)
         //{
         //    awaitable<void> r{ true };
 
@@ -738,15 +760,10 @@ namespace pi
         //    co_await r;
         //}
 
-        //friend awaitable<void> operator&&(awaitable<void> a1, ref a2)
+        //template <typename V = void, typename U = T, typename std::enable_if<std::is_same<V, void>::value && !std::is_same<U, void>::value>::type* = nullptr>
+        //friend awaitable<void> operator&&(awaitable<V>&& a1, reference<awaitable<U>> a2)
         //{
-        //    awaitable<void> r{ true };
-
-        //    unsigned count = 2; // NB: count remains on the stack due to the co_await below
-        //    await_one(a1, r.get_proxy(), count);
-        //    await_one(a2, r.get_proxy(), count);
-
-        //    co_await r;
+        //    return operator_and(std::move(a1), a2);
         //}
 
     private:
