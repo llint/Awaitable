@@ -598,7 +598,7 @@ namespace pi
                 return;
             }
 
-            p.set_ready(a.get().get_value().move());
+            p.set_ready(a.get().get_value()._value);
         }
 
         // NB: use of template template parameter is to avoid recursive template instantiation when retrieving the proxy type!
@@ -618,7 +618,7 @@ namespace pi
                 return;
             }
 
-            p.set_ready(a.get_value()._value);
+            p.set_ready(a.get_value().move());
         }
 
         static nawaitable await_one(ref a, typename awaitable<void>::proxy p, unsigned& count = 0, cancellation::token ct = cancellation::token::none())
@@ -679,6 +679,8 @@ namespace pi
             return r;
         }
 
+        // NB: input type of awaitable&& makes no sense, since the final result is a reference to an most decayed awaitable, an rvalue is temporary in nature, and thus should not be referenced!
+
         friend awaitable<ref> operator||(ref a1, ref a2)
         {
             awaitable<ref> r{ true };
@@ -687,12 +689,17 @@ namespace pi
             return r;
         }
 
-        friend awaitable<ref> operator||(awaitable<ref> a1, ref a2)
+        friend awaitable<ref> operator||(awaitable<ref>&& a1, ref a2)
         {
             awaitable<ref> r{ true };
             await_one(std::move(a1), r.get_proxy());
             await_one(a2, r.get_proxy());
             return r;
+        }
+
+        friend awaitable<ref> operator||(ref a1, awaitable<ref>&& a2)
+        {
+            return std::move(a2) || a1;
         }
 
         friend awaitable<ref> operator||(reference<awaitable<ref>> a1, ref a2)
@@ -702,6 +709,48 @@ namespace pi
             await_one(a2, r.get_proxy());
             return r;
         }
+
+        friend awaitable<ref> operator||(ref a1, reference<awaitable<ref>> a2)
+        {
+            return a2 || a1;
+        }
+
+        friend awaitable<ref> operator||(awaitable<ref>&& a1, reference<awaitable<ref>> a2)
+        {
+            awaitable<ref> r{ true };
+            await_one(std::move(a1), r.get_proxy());
+            await_one(a2, r.get_proxy());
+            return r;
+        }
+
+        friend awaitable<ref> operator||(reference<awaitable<ref>> a1, awaitable<ref>&& a2)
+        {
+            return std::move(a2) || a1;
+        }
+
+        friend awaitable<ref> operator||(awaitable<ref>&& a1, awaitable<ref>&& a2)
+        {
+            awaitable<ref> r{ true };
+            await_one(std::move(a1), r.get_proxy());
+            await_one(std::move(a2), r.get_proxy());
+            return r;
+        }
+
+        // NB: this operator, if defined, would collide with the next level operator||(ref, ref) of the next level type only by return value
+        // we can just rely on the next level operator||(ref, ref), and we just need to unwrap the return value to get the inner most awaitable::ref
+        // auto r1 = a1 || a2;
+        // auto r2 = a3 || a4;
+        // auto ar = r1 || a2;
+        // ar would be of type awaitable<typename awaitable<typename awaitable<int>::ref>::ref>
+        // "auto x = co_await ar", x would be the reference of either r1 or r2, of type typename awaitable<typename awaitable<int>::ref>::ref
+        // and to get the innermost task, we need to get_value()
+        //friend awaitable<ref> operator||(reference<awaitable<ref>> a1, reference<awaitable<ref>> a2)
+        //{
+        //    awaitable<ref> r{ true };
+        //    await_one(a1, r.get_proxy());
+        //    await_one(a2, r.get_proxy());
+        //    return r;
+        //}
 
         static awaitable<void> when_all(std::deque<ref>& awaitables, cancellation::token ct = cancellation::token::none())
         {

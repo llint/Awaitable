@@ -80,10 +80,16 @@ nawaitable test()
         auto a2 = awaitable<int>{ 4s };
         auto a3 = awaitable<int>{ 5s };
         auto a4 = awaitable<int>{ 6s };
-        auto ar = co_await (a2 || a3 || a1 || a4);
+        auto ar = co_await ((a2 || a3) || (a1 || a4));
         assert(ar == a1);
         std::cout << "co_await (a1 || a2)" << std::endl;
     }
+
+    // NB: what happens if we do: co_await (a1 || a2 || a1 || a2)?
+    // in the current implmentation, the second coroutine that awaits the same awaitable which was awaited by another coroutine already
+    // so when the awaitable is awaited, only the most recent awaiter would be resumed, the previous one would never be awaken up anymore!
+    // TODO: we might want to use a hashset to store all the awaiters of the same awaitable in the promise_type, so when the awaitable is
+    // awaken, all the awaiters would be resumed
 
     {
         auto a1 = awaitable<void>{ 5s };
