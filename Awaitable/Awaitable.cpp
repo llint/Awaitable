@@ -80,9 +80,11 @@ nawaitable test()
         auto a2 = awaitable<int>{ 4s };
         auto a3 = awaitable<int>{ 5s };
         auto a4 = awaitable<int>{ 6s };
-        auto ar = co_await ((a2 || a3) || (a1 || a4));
-        assert(ar == a1);
-        std::cout << "co_await (a1 || a2)" << std::endl;
+        {
+            auto ar = co_await((a2 || a3) || (a1 || a4));
+            assert(ar == a1);
+            std::cout << "co_await (a1 || a2)" << std::endl;
+        }
     }
 
     // NB: what happens if we do: co_await (a1 || a2 || a1 || a2)?

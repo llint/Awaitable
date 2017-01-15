@@ -680,7 +680,11 @@ namespace pi
         }
 
         // NB: input type of awaitable&& makes no sense, since the final result is a reference to an most decayed awaitable, an rvalue is temporary in nature, and thus should not be referenced!
+        // so we don't define the following verion
+        // friend awaitable<ref> operator||(awaitable&& a1, awaitable&& a2);
+        // as well as the combinations of awaitable&& with other awaitable types
 
+        // [1]
         friend awaitable<ref> operator||(ref a1, ref a2)
         {
             awaitable<ref> r{ true };
@@ -689,6 +693,7 @@ namespace pi
             return r;
         }
 
+        // [2-1]
         friend awaitable<ref> operator||(awaitable<ref>&& a1, ref a2)
         {
             awaitable<ref> r{ true };
@@ -697,11 +702,13 @@ namespace pi
             return r;
         }
 
+        // [2-2]
         friend awaitable<ref> operator||(ref a1, awaitable<ref>&& a2)
         {
             return std::move(a2) || a1;
         }
 
+        // [3-1]
         friend awaitable<ref> operator||(reference<awaitable<ref>> a1, ref a2)
         {
             awaitable<ref> r{ true };
@@ -710,11 +717,13 @@ namespace pi
             return r;
         }
 
+        // [3-2]
         friend awaitable<ref> operator||(ref a1, reference<awaitable<ref>> a2)
         {
             return a2 || a1;
         }
 
+        // [4-1]
         friend awaitable<ref> operator||(awaitable<ref>&& a1, reference<awaitable<ref>> a2)
         {
             awaitable<ref> r{ true };
@@ -723,11 +732,13 @@ namespace pi
             return r;
         }
 
+        // [4-2]
         friend awaitable<ref> operator||(reference<awaitable<ref>> a1, awaitable<ref>&& a2)
         {
             return std::move(a2) || a1;
         }
 
+        // [5]
         friend awaitable<ref> operator||(awaitable<ref>&& a1, awaitable<ref>&& a2)
         {
             awaitable<ref> r{ true };
@@ -744,6 +755,7 @@ namespace pi
         // ar would be of type awaitable<typename awaitable<typename awaitable<int>::ref>::ref>
         // "auto x = co_await ar", x would be the reference of either r1 or r2, of type typename awaitable<typename awaitable<int>::ref>::ref
         // and to get the innermost task, we need to get_value()
+        // [6]
         //friend awaitable<ref> operator||(reference<awaitable<ref>> a1, reference<awaitable<ref>> a2)
         //{
         //    awaitable<ref> r{ true };
