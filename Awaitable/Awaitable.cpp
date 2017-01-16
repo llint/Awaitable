@@ -72,13 +72,22 @@ nawaitable test_multi_await(awaitable<int>::ref a, const std::string& name)
 
 nawaitable test()
 {
-    //{
-    //    auto a = awaitable<int>{ true };
-    //    set_ready_after_timeout(a.get_proxy(), 3s);
-    //    test_multi_await(a, "A");
-    //    test_multi_await(a, "B");
-    //    co_await a;
-    //}
+    {
+        auto a1 = awaitable<void>{ 5s };
+        auto a2 = awaitable<void>{ 4s };
+        std::deque<awaitable<void>::ref> as{ a1, a2 };
+        auto ar = co_await awaitable<void>::when_any(as);
+        assert(ar == a2);
+        std::cout << "co_await awaitable<void>::when_any(as)" << std::endl;
+    }
+
+    {
+        auto a = awaitable<int>{ true };
+        set_ready_after_timeout(a.get_proxy(), 3s);
+        test_multi_await(a, "A");
+        test_multi_await(a, "B");
+        co_await a;
+    }
 
     try
     {
@@ -107,15 +116,6 @@ nawaitable test()
     // so when the awaitable is awaited, only the most recent awaiter would be resumed, the previous one would never be awaken up anymore!
     // TODO: we might want to use a hashset to store all the awaiters of the same awaitable in the promise_type, so when the awaitable is
     // awaken, all the awaiters would be resumed
-
-    {
-        auto a1 = awaitable<void>{ 5s };
-        auto a2 = awaitable<void>{ 4s };
-        std::deque<awaitable<void>::ref> as{ a1, a2 };
-        auto ar = co_await awaitable<void>::when_any(as);
-        assert(ar == a2);
-        std::cout << "co_await awaitable<void>::when_any(as)" << std::endl;
-    }
 
     {
         auto a1 = awaitable<int>{ 3s };

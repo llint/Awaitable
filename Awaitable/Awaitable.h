@@ -284,7 +284,7 @@ namespace pi
 
         explicit awaitable(std::chrono::high_resolution_clock::duration timeout)
             : _id(++current_id())
-            , _timeout(timeout)
+            , _when(std::chrono::high_resolution_clock::now() + timeout) // NB: when the awaitable is a timed wait primitive, its expiration is pre-determined!
         {
             registry().emplace(_id, *this);
         }
@@ -298,17 +298,14 @@ namespace pi
             , _ready(other._ready)
             , _suspend(other._suspend)
             , _when(other._when)
-            , _awaiter_coro(other._awaiter_coro)
-            , _timeout(other._timeout)
+            , _awaiter_coros(std::move(other._awaiter_coros))
             , _exp(std::move(other._exp))
             , _value(std::move(other._value))
         {
             other._id = 0;
-            other._timeout = 0s;
             other._ready = false;
             other._suspend = false;
             other._coroutine = nullptr;
-            other._awaiter_coro = nullptr;
             other._when = std::chrono::high_resolution_clock::time_point{};
 
             auto it = registry().find(_id);
@@ -413,15 +410,19 @@ namespace pi
                 return suspend_never{};
             }
 
-            coroutine_handle<> _awaiter_coro = nullptr;
+            // TODO: we might want to enforce FIFO ordering
+            std::unordered_set<coroutine_handle<>> _awaiter_coros;
 
             auto final_suspend()
             {
-                if (_awaiter_coro)
+                if (!_awaiter_coros.empty())
                 {
-                    executor::singleton().add_ready_coro(_awaiter_coro);
-                    _awaiter_coro = nullptr;
-                    executor::singleton().decrement_num_outstanding_coros();
+                    for (auto coro : _awaiter_coros)
+                    {
+                        executor::singleton().add_ready_coro(coro);
+                        executor::singleton().decrement_num_outstanding_coros();
+                    }
+                    _awaiter_coros.clear();
                 }
                 return suspend_always{}; // NB: if we want to access the return value in await_resume, we need to keep the current coroutine around, even though coro.done() is now true! 
             }
@@ -436,7 +437,7 @@ namespace pi
         bool await_ready() noexcept
         {
             // if I'm enclosing a coroutine, use its status; otherwise, suspend if not ready
-            return _coroutine ? _coroutine.done() : _ready;
+            return _coroutine ? _coroutine.done() : _when != std::chrono::high_resolution_clock::time_point{} ? std::chrono::high_resolution_clock::now() >= _when : _ready;
         }
 
         void await_suspend(coroutine_handle<> awaiter_coro) noexcept
@@ -445,15 +446,24 @@ namespace pi
             {
                 // I'm not enclosing a coroutine while I'm awaited (await resumable_thing{};), add the awaiter's frame
 
-                if (_timeout.count() > 0)
+                if (_when != std::chrono::high_resolution_clock::time_point{})
                 {
-                    _when = std::chrono::high_resolution_clock::now() + _timeout;
-                    _awaiter_coro = awaiter_coro;
-                    executor::singleton().add_timed_wait_coro(_when, _awaiter_coro);
+                    if (std::chrono::high_resolution_clock::now() >= _when)
+                    {
+                        // the timer has already expired - but we should have guarded this situation in await_ready, so this should not happen
+                        // however, if this does happen, we should just put the awaiter_coro into the ready queue
+                        assert(false); // let's make sure this does not happen actually, but nevertheless, we add the awaiter_coro to the ready queue
+                        executor::singleton().add_ready_coro(awaiter_coro);
+                    }
+                    else
+                    {
+                        _awaiter_coros.emplace(awaiter_coro); // TODO: FIFO ordering of the awaiters ...
+                        executor::singleton().add_timed_wait_coro(_when, awaiter_coro);
+                    }
                 }
                 else if (_suspend)
                 {
-                    _awaiter_coro = awaiter_coro;
+                    _awaiter_coros.emplace(awaiter_coro); // TODO: FIFO ordering of the awaiters ...
                     executor::singleton().increment_num_outstanding_coros();
                 }
                 else
@@ -464,7 +474,7 @@ namespace pi
             else
             {
                 // I'm waiting for some other coroutine to finish, the awaiter's frame can only be queued until my awaited one finishes
-                _coroutine.promise()._awaiter_coro = awaiter_coro;
+                _coroutine.promise()._awaiter_coros.emplace(awaiter_coro);
                 executor::singleton().increment_num_outstanding_coros();
             }
         }
@@ -518,7 +528,7 @@ namespace pi
                 _coroutine = nullptr;
             }
 
-            _awaiter_coro = nullptr;
+            _awaiter_coros.clear();
             _when = std::chrono::high_resolution_clock::time_point{};
 
             if (_exp)
@@ -531,19 +541,22 @@ namespace pi
 
         void set_ready()
         {
-            if (_awaiter_coro)
+            if (!_awaiter_coros.empty())
             {
-                executor::singleton().add_ready_coro(_awaiter_coro);
-                if (_suspend)
+                for (auto coro : _awaiter_coros)
                 {
-                    executor::singleton().decrement_num_outstanding_coros();
-                }
-                else
-                {
-                    executor::singleton().remove_timed_wait_coro(_when, _awaiter_coro);
+                    executor::singleton().add_ready_coro(coro);
+                    if (_suspend)
+                    {
+                        executor::singleton().decrement_num_outstanding_coros();
+                    }
+                    else
+                    {
+                        executor::singleton().remove_timed_wait_coro(_when, coro);
+                    }
                 }
 
-                _awaiter_coro = nullptr;
+                _awaiter_coros.clear();
                 _when = std::chrono::high_resolution_clock::time_point{};
             }
             _ready = true;
@@ -623,7 +636,7 @@ namespace pi
             p.set_ready(a.get_value().move());
         }
 
-        static nawaitable await_one(ref a, typename awaitable<void>::proxy p, unsigned& count = 0, cancellation::token ct = cancellation::token::none())
+        static nawaitable await_one(ref a, typename awaitable<void>::proxy p, size_t& count = 0, cancellation::token ct = cancellation::token::none())
         {
             // NB: the cancellation token will remain in scope until the current function returns
             ct.register_action([a] { a.get().set_exception(std::make_exception_ptr(std::exception())); });
@@ -644,7 +657,7 @@ namespace pi
             }
         }
 
-        static nawaitable await_one(awaitable a, typename awaitable<void>::proxy p, unsigned& count = 0, cancellation::token ct = cancellation::token::none())
+        static nawaitable await_one(awaitable a, typename awaitable<void>::proxy p, size_t& count = 0, cancellation::token ct = cancellation::token::none())
         {
             // NB: the cancellation token will remain in scope until the current function returns
             ct.register_action([&a] { a.set_exception(std::make_exception_ptr(std::exception())); });
@@ -770,7 +783,7 @@ namespace pi
         {
             awaitable<void> r{ true };
 
-            unsigned count = awaitables.size(); // NB: count remains on the stack due to the co_await below
+            size_t count = awaitables.size(); // NB: count remains on the stack due to the co_await below
             for (auto a : awaitables)
             {
                 await_one(a, r.get_proxy(), count, ct);
@@ -783,7 +796,7 @@ namespace pi
         {
             awaitable<void> r{ true };
 
-            unsigned count = 2; // NB: count remains on the stack due to the co_await below
+            size_t count = 2; // NB: count remains on the stack due to the co_await below
             await_one(a1, r.get_proxy(), count);
             await_one(a2, r.get_proxy(), count);
 
@@ -795,7 +808,7 @@ namespace pi
         {
             awaitable<void> r{ true };
 
-            unsigned count = 2; // NB: count remains on the stack due to the co_await below
+            size_t count = 2; // NB: count remains on the stack due to the co_await below
             await_one(std::move(a1), r.get_proxy(), count);
             await_one(a2, r.get_proxy(), count);
 
@@ -860,15 +873,14 @@ namespace pi
             : _coroutine(coroutine) {}
 
         // the coroutine this awaitable is enclosing; this is created by promise_type::get_return_object
-        coroutine_handle<promise_type> _coroutine = nullptr;
+        coroutine_handle<promise_type> _coroutine{ nullptr };
 
         // the awaiter coroutine when this awaitable is a primitive - i.e. it doesn't enclose a coroutine, set only when _coroutine is nullptr!
-        coroutine_handle<> _awaiter_coro = nullptr;
-        std::chrono::high_resolution_clock::time_point _when;
+        std::unordered_set<coroutine_handle<>> _awaiter_coros;
+        std::chrono::high_resolution_clock::time_point _when; // NB: this should be initialized in the constructor, and cannot be modified 
 
         bool _ready = false;
         bool _suspend = false;
-        std::chrono::high_resolution_clock::duration _timeout;
     };
 
     auto operator co_await(std::chrono::high_resolution_clock::duration duration)
