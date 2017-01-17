@@ -804,6 +804,7 @@ namespace pi
         }
 
     private:
+        // [2-0]
         static awaitable<void> operator_and(awaitable a1, ref a2)
         {
             awaitable<void> r{ true };
@@ -817,11 +818,38 @@ namespace pi
 
     public:
         // NB: awaitable&& will bind to an rvalue, while ref will bind to an lvalue
+        // [2-1]
         friend awaitable<void> operator&&(awaitable&& a1, ref a2)
         {
             // NB: the reason we need to wrap it to operator_and is that a coroutine doesn't like rvalue reference (lvalue reference seems to be fine)
             // operator_and is a coroutine, and we make it happy by converting the rvalue reference to an lvalue - could this become a pattern?
             return operator_and(std::move(a1), a2);
+        }
+
+        // [2-2]
+        friend awaitable<void> operator&&(ref a1, awaitable&& a2)
+        {
+            return operator_and(std::move(a2), a1);
+        }
+
+    private:
+        // [3-0]
+        static awaitable<void> operator_and(awaitable a1, awaitable a2)
+        {
+            awaitable<void> r{ true };
+
+            size_t count = 2; // NB: count remains on the stack due to the co_await below
+            await_one(std::move(a1), r.get_proxy(), count);
+            await_one(std::move(a2), r.get_proxy(), count);
+
+            co_await r;
+        }
+
+    public:
+        // [3]
+        friend awaitable<void> operator&&(awaitable&& a1, awaitable&& a2)
+        {
+            return operator_and(std::move(a1), std::move(a2));
         }
 
         //template <typename V = void, typename U = T, typename std::enable_if<std::is_same<V, void>::value && !std::is_same<U, void>::value>::type* = nullptr>

@@ -79,6 +79,7 @@ nawaitable test()
         auto ar = co_await awaitable<void>::when_any(as);
         assert(ar == a2);
         std::cout << "co_await awaitable<void>::when_any(as)" << std::endl;
+        co_await (a1 && a2); // do a join, otherwise the awaitable that times out later will come back finding out it's destructed already - dangling reference!
     }
 
     {
