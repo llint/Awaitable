@@ -515,7 +515,9 @@ namespace pi
         typename impl::ptr _impl_ptr;
 
     public:
-        using promise_type = impl::promise_type;
+        struct promise_type : impl::promise_type
+        {
+        };
 
         awaitable()
             : _impl_ptr(std::make_shared<impl>())
