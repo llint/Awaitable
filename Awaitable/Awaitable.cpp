@@ -87,7 +87,12 @@ nawaitable test()
         set_ready_after_timeout(a.get_proxy(), 3s);
         test_multi_await(a, "A");
         test_multi_await(a, "B");
-        co_await a;
+        co_await a; // here is the potential problem:
+        std::cout << "### after 'co_await a' ### " << std::endl;
+        // if the current coroutine is resumed first, then the current scope will exit, destructing 'a', while the two test_multi_await coroutines will then resume
+        // then they will operate on the now dangling reference to a, then memory corruption!
+        // TODO: in addition to changing the usage of ref to proxy, we also need to guarantee the ordering of the awaiters, so we get less suprises when they are resumed!
+        // usage of std::variant<awaitable, awaitable::proxy> in place of ref
     }
 
     try

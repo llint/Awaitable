@@ -318,11 +318,14 @@ namespace pi
         ~awaitable()
         {
             registry().erase(_id);
+            set_ready();
+            // TODO: should we destroy the containing coroutine, if any? the previous experience caused some undefined behavior, we need to revisit
         }
 
         // The proxy/handle class for awaitables, since awaitables could be one liner, and they could get destructed the next line after co_await
         // With the advent of cancellation, awaitables can be cancelled earlier than they could be set ready, and if we use awaitable references,
         // they could become dangling and referencing already destructed awaitables when they get the chance to set_ready/exception!
+        // NB: instead of passing awaitable::ref around, awaitable::proxy should be passed around to carry out the waiting
         class proxy
         {
         public:
@@ -369,11 +372,47 @@ namespace pi
                 }
             }
 
+            bool await_ready() noexcept
+            {
+                auto it = registry().find(_id);
+                if (it != registry().end())
+                {
+                    return it->second.get().await_ready();
+                }
+                return true; // not found, no suspend
+            }
+
+            void await_suspend(coroutine_handle<> awaiter_coro) noexcept
+            {
+                auto it = registry().find(_id);
+                if (it != registry().end())
+                {
+                    return it->second.get().await_suspend(awaiter_coro);
+                }
+            }
+
+            T await_resume() noexcept
+            {
+                auto it = registry().find(_id);
+                if (it != registry().end())
+                {
+                    return it->second.get().await_resume();
+                }
+
+                // NB: this helps to identify the scenario that the original awaitable gets destructed
+                throw std::exception{"awaitable.proxy.await_resume"};
+            }
+
         private:
             unsigned _id;
         };
 
         proxy get_proxy() const
+        {
+            return proxy{ _id };
+        }
+
+        operator proxy() const
         {
             return proxy{ _id };
         }
@@ -509,7 +548,7 @@ namespace pi
             }
         };
 
-        T await_resume()
+        T await_resume() noexcept
         {
             if (_coroutine)
             {
