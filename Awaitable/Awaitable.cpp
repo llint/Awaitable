@@ -8,14 +8,14 @@
 
 using namespace pi;
 
-nawaitable set_ready_after_timeout(awaitable<int>::proxy awtbl, std::chrono::high_resolution_clock::duration timeout)
+nawaitable set_ready_after_timeout(awaitable<int> awtbl, std::chrono::high_resolution_clock::duration timeout)
 {
     co_await timeout; // timed wait
 
     awtbl.set_ready(123);
 }
 
-nawaitable set_exception_after_timeout(awaitable<int>::proxy awtbl, std::chrono::high_resolution_clock::duration timeout)
+nawaitable set_exception_after_timeout(awaitable<int> awtbl, std::chrono::high_resolution_clock::duration timeout)
 {
     co_await timeout;
 
@@ -34,7 +34,7 @@ awaitable<int> named_counter(std::string name)
 
     {
         auto awtbl = awaitable<int>{ true }; // suspend, and returns the value from somewhere else
-        set_ready_after_timeout(awtbl.get_proxy(), 3s);
+        set_ready_after_timeout(awtbl, 3s);
         auto x = co_await awtbl;
         std::cout << "counter(" << name << ") resumed #" << 3 << " ### " << x << std::endl;
     }
@@ -42,7 +42,7 @@ awaitable<int> named_counter(std::string name)
     try
     {
         auto awtbl = awaitable<int>{ true }; // suspend, and returns the value from somewhere else
-        set_exception_after_timeout(awtbl.get_proxy(), 3s);
+        set_exception_after_timeout(awtbl, 3s);
         auto x = co_await awtbl;
         std::cout << "counter(" << name << ") resumed #" << 4 << " ### " << x << std::endl;
     }
@@ -63,9 +63,9 @@ awaitable<void> test_exception()
     std::cout << "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" << std::endl;
 }
 
-nawaitable test_multi_await(awaitable<int>::ref a, const std::string& name)
+nawaitable test_multi_await(awaitable<int> a, const std::string& name)
 {
-    co_await a.get();
+    co_await a;
 
     std::cout << "### test_multi_await: " << name << std::endl;
 }
@@ -75,7 +75,7 @@ nawaitable test()
     {
         auto a1 = awaitable<void>{ 5s };
         auto a2 = awaitable<void>{ 4s };
-        std::deque<awaitable<void>::ref> as{ a1, a2 };
+        std::deque<awaitable<void>> as{ a1, a2 };
         auto ar = co_await awaitable<void>::when_any(as);
         assert(ar == a2);
         std::cout << "co_await awaitable<void>::when_any(as)" << std::endl;
@@ -84,7 +84,7 @@ nawaitable test()
 
     {
         auto a = awaitable<int>{ true };
-        set_ready_after_timeout(a.get_proxy(), 3s);
+        set_ready_after_timeout(a, 3s);
         test_multi_await(a, "A");
         test_multi_await(a, "B");
         co_await a; // here is the potential problem:
@@ -112,7 +112,7 @@ nawaitable test()
         auto a4 = awaitable<int>{ 6s };
         {
             auto ar = co_await((a2 || a3) || (a1 || a4));
-            assert(ar == a1);
+            assert(ar.get_value() == a1);
             std::cout << "co_await (a1 || a2)" << std::endl;
         }
     }
@@ -127,15 +127,14 @@ nawaitable test()
         auto a1 = awaitable<int>{ 3s };
         auto a2 = awaitable<int>{ 4s };
         auto a3 = awaitable<int>{ 5s };
-        co_await (a1 && a2);
-        co_await (awaitable<int>{3s} && a3);
-        std::cout << "co_await (a1 && a2)" << std::endl;
+        co_await (a1 && a2 && a3);
+        std::cout << "co_await (a1 && a2 && a3)" << std::endl;
     }
 
     {
         auto a1 = awaitable<void>{ 5s };
         auto a2 = awaitable<void>{ 4s };
-        std::deque<awaitable<void>::ref> as{ a1, a2 };
+        std::deque<awaitable<void>> as{ a1, a2 };
         co_await awaitable<void>::when_all(as);
         std::cout << "co_await awaitable<void>::when_all(as)" << std::endl;
     }

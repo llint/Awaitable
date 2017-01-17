@@ -263,404 +263,333 @@ namespace pi
         };
     };
 
+    // The API level awaitable, which can be copied freely, while all the state is saved in the internal shared_ptr
     template <typename T>
     class awaitable
     {
-    public:
-        typedef reference<awaitable> ref;
-
-        awaitable()
-            : _id(++current_id())
-        {
-            registry().emplace(_id, *this);
-        }
-
-        explicit awaitable(bool suspend)
-            : _id(++current_id())
-            , _suspend(suspend)
-        {
-            registry().emplace(_id, *this);
-        }
-
-        explicit awaitable(std::chrono::high_resolution_clock::duration timeout)
-            : _id(++current_id())
-            , _when(std::chrono::high_resolution_clock::now() + timeout) // NB: when the awaitable is a timed wait primitive, its expiration is pre-determined!
-        {
-            registry().emplace(_id, *this);
-        }
-
-        awaitable(awaitable const&) = delete;
-        awaitable& operator=(awaitable const&) = delete;
-
-        awaitable(awaitable&& other)
-            : _id(other._id) // copy the _id over
-            , _coroutine(other._coroutine)
-            , _ready(other._ready)
-            , _suspend(other._suspend)
-            , _when(other._when)
-            , _awaiter_coros(std::move(other._awaiter_coros))
-            , _exp(std::move(other._exp))
-            , _value(std::move(other._value))
-        {
-            other._id = 0;
-            other._ready = false;
-            other._suspend = false;
-            other._coroutine = nullptr;
-            other._when = std::chrono::high_resolution_clock::time_point{};
-
-            auto it = registry().find(_id);
-            if (it != registry().end())
-            {
-                it->second = *this; // replace the reference in the registry, if existing
-            }
-        }
-
-        ~awaitable()
-        {
-            registry().erase(_id);
-            set_ready();
-            // TODO: should we destroy the containing coroutine, if any? the previous experience caused some undefined behavior, we need to revisit
-        }
-
-        // The proxy/handle class for awaitables, since awaitables could be one liner, and they could get destructed the next line after co_await
-        // With the advent of cancellation, awaitables can be cancelled earlier than they could be set ready, and if we use awaitable references,
-        // they could become dangling and referencing already destructed awaitables when they get the chance to set_ready/exception!
-        // NB: instead of passing awaitable::ref around, awaitable::proxy should be passed around to carry out the waiting
-        class proxy
+    private:
+        class impl
         {
         public:
-            proxy(unsigned id)
-                : _id(id)
+            typedef std::shared_ptr<impl> ptr;
+
+            impl() = default;
+            impl(const impl&) = delete;
+            impl(impl&&) = delete;
+            impl& operator=(const impl&) = delete;
+            ~impl() = default;
+
+            explicit impl(bool suspend)
+                : _suspend(suspend)
             {
             }
 
-            proxy(const proxy& rhs)
-                : _id(rhs._id)
+            explicit impl(std::chrono::high_resolution_clock::duration timeout)
+                : _when(std::chrono::high_resolution_clock::now() + timeout)
             {
             }
 
-            proxy& operator=(const proxy& rhs)
+            template <typename X>
+            struct promise_type_base
             {
-                _id = rhs._id;
-            }
+                X _value = X{};
 
-            void set_ready()
-            {
-                auto it = registry().find(_id);
-                if (it != registry().end())
+                void return_value(X&& value)
                 {
-                    it->second.get().set_ready();
+                    _value = std::move(value);
                 }
-            }
+            };
 
-            template <typename U = T, typename std::enable_if<!std::is_same<U, void>::value>::type* = nullptr>
-            void set_ready(U&& value)
+            template <>
+            struct promise_type_base<void>
             {
-                auto it = registry().find(_id);
-                if (it != registry().end())
+                void return_void()
                 {
-                    it->second.get().set_ready(std::move(value));
                 }
-            }
+            };
 
-            void set_exception(std::exception_ptr exp)
+            struct promise_type : promise_type_base<T>
             {
-                auto it = registry().find(_id);
-                if (it != registry().end())
+                awaitable get_return_object()
                 {
-                    it->second.get().set_exception(exp);
+                    return awaitable{ coroutine_handle<promise_type>::from_promise(*this) };
                 }
-            }
+
+                auto initial_suspend()
+                {
+                    // NB: we want the coroutine to run until the first actual suspension point, unless explicitly requested to suspend
+                    return suspend_never{};
+                }
+
+                // TODO: we need to enforce FIFO ordering
+                std::unordered_set<coroutine_handle<>> _awaiter_coros;
+
+                auto final_suspend()
+                {
+                    if (!_awaiter_coros.empty())
+                    {
+                        for (auto coro : _awaiter_coros)
+                        {
+                            executor::singleton().add_ready_coro(coro);
+                            executor::singleton().decrement_num_outstanding_coros();
+                        }
+                        _awaiter_coros.clear();
+                    }
+                    return suspend_always{}; // NB: if we want to access the return value in await_resume, we need to keep the current coroutine around, even though coro.done() is now true! 
+                }
+
+                std::exception_ptr _exp;
+                void set_exception(std::exception_ptr exp)
+                {
+                    _exp = std::move(exp);
+                }
+            };
+
+            explicit impl(coroutine_handle<promise_type> coroutine)
+                : _coroutine(coroutine) {}
 
             bool await_ready() noexcept
             {
-                auto it = registry().find(_id);
-                if (it != registry().end())
-                {
-                    return it->second.get().await_ready();
-                }
-                return true; // not found, no suspend
+                // if I'm enclosing a coroutine, use its status; otherwise, suspend if not ready
+                return _coroutine ? _coroutine.done() : _when != std::chrono::high_resolution_clock::time_point{} ? std::chrono::high_resolution_clock::now() >= _when : _ready;
             }
 
             void await_suspend(coroutine_handle<> awaiter_coro) noexcept
             {
-                auto it = registry().find(_id);
-                if (it != registry().end())
+                if (!_coroutine)
                 {
-                    return it->second.get().await_suspend(awaiter_coro);
+                    // I'm not enclosing a coroutine while I'm awaited (await resumable_thing{};), add the awaiter's frame
+
+                    if (_when != std::chrono::high_resolution_clock::time_point{})
+                    {
+                        if (std::chrono::high_resolution_clock::now() >= _when)
+                        {
+                            // the timer has already expired - but we should have guarded this situation in await_ready, so this should not happen
+                            // however, if this does happen, we should just put the awaiter_coro into the ready queue
+                            assert(false); // let's make sure this does not happen actually, but nevertheless, we add the awaiter_coro to the ready queue
+                            executor::singleton().add_ready_coro(awaiter_coro);
+                        }
+                        else
+                        {
+                            _awaiter_coros.emplace(awaiter_coro); // TODO: FIFO ordering of the awaiters ...
+                            executor::singleton().add_timed_wait_coro(_when, awaiter_coro);
+                        }
+                    }
+                    else if (_suspend)
+                    {
+                        _awaiter_coros.emplace(awaiter_coro); // TODO: FIFO ordering of the awaiters ...
+                        executor::singleton().increment_num_outstanding_coros();
+                    }
+                    else
+                    {
+                        executor::singleton().add_ready_coro(awaiter_coro);
+                    }
+                }
+                else
+                {
+                    // I'm waiting for some other coroutine to finish, the awaiter's frame can only be queued until my awaited one finishes
+                    _coroutine.promise()._awaiter_coros.emplace(awaiter_coro);
+                    executor::singleton().increment_num_outstanding_coros();
                 }
             }
+
+            template <typename X>
+            struct value
+            {
+                X _value = X{};
+                X& get() { return _value; }
+                X move() { return std::move(_value); }
+            };
+
+            template <>
+            struct value<void>
+            {
+                void get() {}
+                void move() {}
+            };
+
+            template <typename X>
+            struct save_promise_value
+            {
+                static void apply(value<X>& v, promise_type& p)
+                {
+                    v._value = std::move(p._value);
+                }
+            };
+
+            template <>
+            struct save_promise_value<void>
+            {
+                static void apply(value<void>&, promise_type&)
+                {
+                }
+            };
 
             T await_resume() noexcept
             {
-                auto it = registry().find(_id);
-                if (it != registry().end())
+                if (_coroutine)
                 {
-                    return it->second.get().await_resume();
+                    if (_coroutine.promise()._exp)
+                    {
+                        _exp = _coroutine.promise()._exp;
+                    }
+                    else
+                    {
+                        save_promise_value<T>::apply(_value, _coroutine.promise());
+                    }
+
+                    // the coroutine is finished, but returned from final_suspend (suspend_always), so we get a chance to retrieve any exception or value
+                    assert(_coroutine.done());
+                    _coroutine.destroy();
+                    _coroutine = nullptr;
                 }
 
-                // NB: this helps to identify the scenario that the original awaitable gets destructed
-                throw std::exception{"awaitable.proxy.await_resume"};
+                _awaiter_coros.clear();
+                _when = std::chrono::high_resolution_clock::time_point{};
+
+                if (_exp)
+                {
+                    std::rethrow_exception(_exp);
+                }
+
+                return _value.move();
             }
 
-        private:
-            unsigned _id;
-        };
-
-        proxy get_proxy() const
-        {
-            return proxy{ _id };
-        }
-
-        operator proxy() const
-        {
-            return proxy{ _id };
-        }
-
-        template <typename X>
-        struct promise_type_base
-        {
-            X _value = X{};
-
-            void return_value(X&& value)
-            {
-                _value = std::move(value);
-            }
-        };
-
-        template <>
-        struct promise_type_base<void>
-        {
-            void return_void()
-            {
-            }
-        };
-
-        struct promise_type : promise_type_base<T>
-        {
-            awaitable get_return_object()
-            {
-                return awaitable(coroutine_handle<promise_type>::from_promise(*this));
-            }
-
-            auto initial_suspend()
-            {
-                // NB: we want the coroutine to run until the first actual suspension point, unless explicitly requested to suspend
-                return suspend_never{};
-            }
-
-            // TODO: we might want to enforce FIFO ordering
-            std::unordered_set<coroutine_handle<>> _awaiter_coros;
-
-            auto final_suspend()
+            void set_ready()
             {
                 if (!_awaiter_coros.empty())
                 {
                     for (auto coro : _awaiter_coros)
                     {
                         executor::singleton().add_ready_coro(coro);
-                        executor::singleton().decrement_num_outstanding_coros();
+                        if (_suspend)
+                        {
+                            executor::singleton().decrement_num_outstanding_coros();
+                        }
+                        else
+                        {
+                            executor::singleton().remove_timed_wait_coro(_when, coro);
+                        }
                     }
+
                     _awaiter_coros.clear();
+                    _when = std::chrono::high_resolution_clock::time_point{};
                 }
-                return suspend_always{}; // NB: if we want to access the return value in await_resume, we need to keep the current coroutine around, even though coro.done() is now true! 
+                _ready = true;
             }
 
-            std::exception_ptr _exp;
+            template <typename U = T, typename std::enable_if<!std::is_same<U, void>::value>::type* = nullptr>
+            void set_ready(U&& value)
+            {
+                _value._value = std::move(value);
+                set_ready();
+            }
+
             void set_exception(std::exception_ptr exp)
             {
                 _exp = std::move(exp);
+                set_ready();
             }
+
+            value<T>& get_value()
+            {
+                return _value;
+            }
+
+        private:
+            value<T> _value;
+
+            std::exception_ptr _exp;
+
+            // the coroutine this awaitable is enclosing; this is created by promise_type::get_return_object
+            coroutine_handle<promise_type> _coroutine{ nullptr };
+
+            // the awaiter coroutine when this awaitable is a primitive - i.e. it doesn't enclose a coroutine, set only when _coroutine is nullptr!
+            std::unordered_set<coroutine_handle<>> _awaiter_coros;
+            std::chrono::high_resolution_clock::time_point _when; // NB: this should be initialized in the constructor, and cannot be modified 
+
+            bool _ready = false;
+            bool _suspend = false;
         };
+
+        typename impl::ptr _impl_ptr;
+
+    public:
+        using promise_type = impl::promise_type;
+
+        awaitable()
+            : _impl_ptr(std::make_shared<impl>())
+        {
+        }
+
+        explicit awaitable(bool suspend)
+            : _impl_ptr(std::make_shared<impl>(suspend))
+        {
+        }
+
+        explicit awaitable(std::chrono::high_resolution_clock::duration timeout)
+            : _impl_ptr(std::make_shared<impl>(timeout))
+        {
+        }
+
+        explicit awaitable(coroutine_handle<promise_type> coroutine)
+            : _impl_ptr(std::make_shared<impl>(coroutine))
+        {
+        }
+
+        awaitable(awaitable const&) = default;
+        awaitable& operator=(awaitable const&) = default;
+        awaitable(awaitable&& other) = default;
+        ~awaitable() = default;
+
+        bool operator==(const awaitable& other) const
+        {
+            return _impl_ptr == other._impl_ptr;
+        }
 
         bool await_ready() noexcept
         {
-            // if I'm enclosing a coroutine, use its status; otherwise, suspend if not ready
-            return _coroutine ? _coroutine.done() : _when != std::chrono::high_resolution_clock::time_point{} ? std::chrono::high_resolution_clock::now() >= _when : _ready;
+            return _impl_ptr->await_ready();
         }
 
         void await_suspend(coroutine_handle<> awaiter_coro) noexcept
         {
-            if (!_coroutine)
-            {
-                // I'm not enclosing a coroutine while I'm awaited (await resumable_thing{};), add the awaiter's frame
-
-                if (_when != std::chrono::high_resolution_clock::time_point{})
-                {
-                    if (std::chrono::high_resolution_clock::now() >= _when)
-                    {
-                        // the timer has already expired - but we should have guarded this situation in await_ready, so this should not happen
-                        // however, if this does happen, we should just put the awaiter_coro into the ready queue
-                        assert(false); // let's make sure this does not happen actually, but nevertheless, we add the awaiter_coro to the ready queue
-                        executor::singleton().add_ready_coro(awaiter_coro);
-                    }
-                    else
-                    {
-                        _awaiter_coros.emplace(awaiter_coro); // TODO: FIFO ordering of the awaiters ...
-                        executor::singleton().add_timed_wait_coro(_when, awaiter_coro);
-                    }
-                }
-                else if (_suspend)
-                {
-                    _awaiter_coros.emplace(awaiter_coro); // TODO: FIFO ordering of the awaiters ...
-                    executor::singleton().increment_num_outstanding_coros();
-                }
-                else
-                {
-                    executor::singleton().add_ready_coro(awaiter_coro);
-                }
-            }
-            else
-            {
-                // I'm waiting for some other coroutine to finish, the awaiter's frame can only be queued until my awaited one finishes
-                _coroutine.promise()._awaiter_coros.emplace(awaiter_coro);
-                executor::singleton().increment_num_outstanding_coros();
-            }
+            _impl_ptr->await_suspend(awaiter_coro);
         }
-
-        template <typename X>
-        struct value
-        {
-            X _value = X{};
-            X move() { return std::move(_value); }
-        };
-
-        template <>
-        struct value<void>
-        {
-            void move() {}
-        };
-
-        template <typename X>
-        struct save_promise_value
-        {
-            static void apply(value<X>& v, promise_type& p)
-            {
-                v._value = std::move(p._value);
-            }
-        };
-
-        template <>
-        struct save_promise_value<void>
-        {
-            static void apply(value<void>&, promise_type&)
-            {
-            }
-        };
 
         T await_resume() noexcept
         {
-            if (_coroutine)
-            {
-                if (_coroutine.promise()._exp)
-                {
-                    _exp = _coroutine.promise()._exp;
-                }
-                else
-                {
-                    save_promise_value<T>::apply(_value, _coroutine.promise());
-                }
-
-                // the coroutine is finished, but returned from final_suspend (suspend_always), so we get a chance to retrieve any exception or value
-                assert(_coroutine.done());
-                _coroutine.destroy();
-                _coroutine = nullptr;
-            }
-
-            _awaiter_coros.clear();
-            _when = std::chrono::high_resolution_clock::time_point{};
-
-            if (_exp)
-            {
-                std::rethrow_exception(_exp);
-            }
-
-            return _value.move();
+            return _impl_ptr->await_resume();
         }
 
         void set_ready()
         {
-            if (!_awaiter_coros.empty())
-            {
-                for (auto coro : _awaiter_coros)
-                {
-                    executor::singleton().add_ready_coro(coro);
-                    if (_suspend)
-                    {
-                        executor::singleton().decrement_num_outstanding_coros();
-                    }
-                    else
-                    {
-                        executor::singleton().remove_timed_wait_coro(_when, coro);
-                    }
-                }
-
-                _awaiter_coros.clear();
-                _when = std::chrono::high_resolution_clock::time_point{};
-            }
-            _ready = true;
+            _impl_ptr->set_ready();
         }
 
         template <typename U = T, typename std::enable_if<!std::is_same<U, void>::value>::type* = nullptr>
         void set_ready(U&& value)
         {
-            _value._value = std::move(value);
-            set_ready();
+            _impl_ptr->set_ready(std::move(value));
         }
 
         void set_exception(std::exception_ptr exp)
         {
-            _exp = std::move(exp);
-            set_ready();
+            _impl_ptr->set_exception(exp);
+        }
+
+        T get_value()
+        {
+            return _impl_ptr->get_value().get();
         }
 
     private:
         // NB: use of template template parameter is to avoid recursive template instantiation when retrieving the proxy type!
-        template < template <typename> class _awaitable >
-        static nawaitable await_one(reference<_awaitable<T>> a, typename awaitable<reference<_awaitable<T>>>::proxy p, cancellation::token ct = cancellation::token::none())
+        //template < template <typename> class _awaitable > // TODO: try without template template parameter
+        static nawaitable await_one(awaitable a, awaitable<awaitable> r, cancellation::token ct = cancellation::token::none())
         {
             // NB: the cancellation token will remain in scope until the current function returns
-            ct.register_action([a] { a.get().set_exception(std::make_exception_ptr(std::exception())); });
-
-            try
-            {
-                co_await a.get();
-            }
-            catch (...)
-            {
-                p.set_exception(std::current_exception());
-                return;
-            }
-
-            p.set_ready(a);
-        }
-
-        // NB: use of template template parameter is to avoid recursive template instantiation when retrieving the proxy type!
-        template < template <typename> class _awaitable >
-        static nawaitable await_one(reference<awaitable<reference<_awaitable<T>>>> a, typename awaitable<reference<_awaitable<T>>>::proxy p, cancellation::token ct = cancellation::token::none())
-        {
-            // NB: the cancellation token will remain in scope until the current function returns
-            ct.register_action([a] { a.get().set_exception(std::make_exception_ptr(std::exception())); });
-
-            try
-            {
-                co_await a.get();
-            }
-            catch (...)
-            {
-                p.set_exception(std::current_exception());
-                return;
-            }
-
-            p.set_ready(a.get().get_value()._value);
-        }
-
-        // NB: use of template template parameter is to avoid recursive template instantiation when retrieving the proxy type!
-        template < template <typename> class _awaitable >
-        static nawaitable await_one(awaitable<reference<_awaitable<T>>> a, typename awaitable<reference<_awaitable<T>>>::proxy p, cancellation::token ct = cancellation::token::none())
-        {
-            // NB: the cancellation token will remain in scope until the current function returns
-            ct.register_action([&a] { a.set_exception(std::make_exception_ptr(std::exception())); });
+            ct.register_action([a] { a.set_exception(std::make_exception_ptr(std::exception("await_one.cancellation"))); });
 
             try
             {
@@ -668,38 +597,19 @@ namespace pi
             }
             catch (...)
             {
-                p.set_exception(std::current_exception());
+                r.set_exception(std::current_exception());
                 return;
             }
 
-            p.set_ready(a.get_value().move());
+            r.set_ready(a);
         }
 
-        static nawaitable await_one(ref a, typename awaitable<void>::proxy p, size_t& count = 0, cancellation::token ct = cancellation::token::none())
+        // NB: use of template template parameter is to avoid recursive template instantiation when retrieving the proxy type!
+        //template < template <typename> class _awaitable > // TODO: try without template template parameter
+        static nawaitable await_one(awaitable<awaitable> a, awaitable<awaitable> r, cancellation::token ct = cancellation::token::none())
         {
             // NB: the cancellation token will remain in scope until the current function returns
-            ct.register_action([a] { a.get().set_exception(std::make_exception_ptr(std::exception())); });
-
-            try
-            {
-                co_await a.get();
-            }
-            catch (...)
-            {
-                p.set_exception(std::current_exception());
-                return;
-            }
-
-            if (count > 0 && --count == 0)
-            {
-                p.set_ready();
-            }
-        }
-
-        static nawaitable await_one(awaitable a, typename awaitable<void>::proxy p, size_t& count = 0, cancellation::token ct = cancellation::token::none())
-        {
-            // NB: the cancellation token will remain in scope until the current function returns
-            ct.register_action([&a] { a.set_exception(std::make_exception_ptr(std::exception())); });
+            ct.register_action([a] { a.set_exception(std::make_exception_ptr(std::exception("await_one.cancellation"))); });
 
             try
             {
@@ -707,27 +617,45 @@ namespace pi
             }
             catch (...)
             {
-                p.set_exception(std::current_exception());
+                r.set_exception(std::current_exception());
+                return;
+            }
+
+            p.set_ready(a.get_value());
+        }
+
+        static nawaitable await_one(awaitable a, awaitable<void> r, size_t& count = 0, cancellation::token ct = cancellation::token::none())
+        {
+            // NB: the cancellation token will remain in scope until the current function returns
+            ct.register_action([a] { a.set_exception(std::make_exception_ptr(std::exception("await_one.cancellation"))); });
+
+            try
+            {
+                co_await a;
+            }
+            catch (...)
+            {
+                r.set_exception(std::current_exception());
                 return;
             }
 
             if (count > 0 && --count == 0)
             {
-                p.set_ready();
+                r.set_ready();
             }
         }
 
     public:
-        static awaitable<ref> when_any(std::deque<ref>& awaitables, cancellation::token ct = cancellation::token::none())
+        static awaitable<awaitable> when_any(std::deque<awaitable>& awaitables, cancellation::token ct = cancellation::token::none())
         {
-            awaitable<ref> r{ true };
+            awaitable<awaitable> r{ true };
 
             for (auto a : awaitables)
             {
                 // NB: cannot register the cancellation action here, since we cannot maintain the call frame here
                 // the cancellation token will be destructed when this function goes out of scope even before await_one ends
                 // thus unregisters the registered action!
-                await_one(a, r.get_proxy(), ct);
+                await_one(a, r, ct);
             }
 
             return r;
@@ -739,215 +667,79 @@ namespace pi
         // as well as the combinations of awaitable&& with other awaitable types
 
         // [1]
-        friend awaitable<ref> operator||(ref a1, ref a2)
+        friend awaitable<awaitable> operator||(awaitable a1, awaitable a2)
         {
-            awaitable<ref> r{ true };
-            await_one(a1, r.get_proxy());
-            await_one(a2, r.get_proxy());
+            awaitable<awaitable> r{ true };
+            await_one(a1, r);
+            await_one(a2, r);
             return r;
         }
 
         // [2-1]
-        friend awaitable<ref> operator||(awaitable<ref>&& a1, ref a2)
+        friend awaitable<awaitable> operator||(awaitable<awaitable> a1, awaitable a2)
         {
-            awaitable<ref> r{ true };
-            await_one(std::move(a1), r.get_proxy());
-            await_one(a2, r.get_proxy());
+            awaitable<awaitable> r{ true };
+            await_one(a1, r);
+            await_one(a2, r);
             return r;
         }
 
         // [2-2]
-        friend awaitable<ref> operator||(ref a1, awaitable<ref>&& a2)
-        {
-            return std::move(a2) || a1;
-        }
-
-        // [3-1]
-        friend awaitable<ref> operator||(reference<awaitable<ref>> a1, ref a2)
-        {
-            awaitable<ref> r{ true };
-            await_one(a1, r.get_proxy());
-            await_one(a2, r.get_proxy());
-            return r;
-        }
-
-        // [3-2]
-        friend awaitable<ref> operator||(ref a1, reference<awaitable<ref>> a2)
+        friend awaitable<awaitable> operator||(awaitable a1, awaitable<awaitable> a2)
         {
             return a2 || a1;
         }
 
-        // [4-1]
-        friend awaitable<ref> operator||(awaitable<ref>&& a1, reference<awaitable<ref>> a2)
-        {
-            awaitable<ref> r{ true };
-            await_one(std::move(a1), r.get_proxy());
-            await_one(a2, r.get_proxy());
-            return r;
-        }
-
-        // [4-2]
-        friend awaitable<ref> operator||(reference<awaitable<ref>> a1, awaitable<ref>&& a2)
-        {
-            return std::move(a2) || a1;
-        }
-
-        // [5]
-        friend awaitable<ref> operator||(awaitable<ref>&& a1, awaitable<ref>&& a2)
-        {
-            awaitable<ref> r{ true };
-            await_one(std::move(a1), r.get_proxy());
-            await_one(std::move(a2), r.get_proxy());
-            return r;
-        }
-
-        // NB: this operator, if defined, would collide with the next level operator||(ref, ref) of the next level type only by return value
-        // we can just rely on the next level operator||(ref, ref), and we just need to unwrap the return value to get the inner most awaitable::ref
-        // auto r1 = a1 || a2;
-        // auto r2 = a3 || a4;
-        // auto ar = r1 || a2;
-        // ar would be of type awaitable<typename awaitable<typename awaitable<int>::ref>::ref>
-        // "auto x = co_await ar", x would be the reference of either r1 or r2, of type typename awaitable<typename awaitable<int>::ref>::ref
-        // and to get the innermost task, we need to get_value()
-        // [6]
-        //friend awaitable<ref> operator||(reference<awaitable<ref>> a1, reference<awaitable<ref>> a2)
+        // [3] - would this collide with the method as defined in the next level (when instantiating awaitable<awaitable> - probably
+        //friend awaitable<awaitable> operator||(awaitable<awaitable> a1, awaitable<awaitable> a2)
         //{
-        //    awaitable<ref> r{ true };
-        //    await_one(a1, r.get_proxy());
-        //    await_one(a2, r.get_proxy());
+        //    awaitable<awaitable> r{ true };
+        //    await_one(a1, r);
+        //    await_one(a2, r);
         //    return r;
         //}
 
-        static awaitable<void> when_all(std::deque<ref>& awaitables, cancellation::token ct = cancellation::token::none())
+        static awaitable<void> when_all(std::deque<awaitable>& awaitables, cancellation::token ct = cancellation::token::none())
         {
             awaitable<void> r{ true };
 
             size_t count = awaitables.size(); // NB: count remains on the stack due to the co_await below
             for (auto a : awaitables)
             {
-                await_one(a, r.get_proxy(), count, ct);
+                await_one(a, r, count, ct);
             }
 
             co_await r;
         }
 
-        friend awaitable<void> operator&&(ref a1, ref a2)
+        friend awaitable<void> operator&&(awaitable a1, awaitable a2)
         {
             awaitable<void> r{ true };
 
             size_t count = 2; // NB: count remains on the stack due to the co_await below
-            await_one(a1, r.get_proxy(), count);
-            await_one(a2, r.get_proxy(), count);
+            await_one(a1, r, count);
+            await_one(a2, r, count);
 
             co_await r;
         }
 
-    private:
-        // [2-0]
-        static awaitable<void> operator_and(awaitable a1, ref a2)
+        template <typename U = T, typename std::enable_if<!std::is_same<U, void>::value>::type* = nullptr>
+        friend awaitable<void> operator&&(awaitable<void> a1, awaitable<U> a2)
         {
             awaitable<void> r{ true };
 
             size_t count = 2; // NB: count remains on the stack due to the co_await below
-            await_one(std::move(a1), r.get_proxy(), count);
-            await_one(a2, r.get_proxy(), count);
+            await_one(a1, r, count);
+            await_one(a2, r, count);
 
             co_await r;
         }
 
-    public:
-        // NB: awaitable&& will bind to an rvalue, while ref will bind to an lvalue
-        // [2-1]
-        friend awaitable<void> operator&&(awaitable&& a1, ref a2)
+        template <typename U = T, typename std::enable_if<!std::is_same<U, void>::value>::type* = nullptr>
+        friend awaitable<void> operator&&(awaitable<U> a1, awaitable<void> a2)
         {
-            // NB: the reason we need to wrap it to operator_and is that a coroutine doesn't like rvalue reference (lvalue reference seems to be fine)
-            // operator_and is a coroutine, and we make it happy by converting the rvalue reference to an lvalue - could this become a pattern?
-            return operator_and(std::move(a1), a2);
+            return a1 && a2;
         }
-
-        // [2-2]
-        friend awaitable<void> operator&&(ref a1, awaitable&& a2)
-        {
-            return operator_and(std::move(a2), a1);
-        }
-
-    private:
-        // [3-0]
-        static awaitable<void> operator_and(awaitable a1, awaitable a2)
-        {
-            awaitable<void> r{ true };
-
-            size_t count = 2; // NB: count remains on the stack due to the co_await below
-            await_one(std::move(a1), r.get_proxy(), count);
-            await_one(std::move(a2), r.get_proxy(), count);
-
-            co_await r;
-        }
-
-    public:
-        // [3]
-        friend awaitable<void> operator&&(awaitable&& a1, awaitable&& a2)
-        {
-            return operator_and(std::move(a1), std::move(a2));
-        }
-
-        //template <typename V = void, typename U = T, typename std::enable_if<std::is_same<V, void>::value && !std::is_same<U, void>::value>::type* = nullptr>
-        //static awaitable<void> operator_and(awaitable<V> a1, reference<awaitable<U>> a2)
-        //{
-        //    awaitable<void> r{ true };
-
-        //    unsigned count = 2; // NB: count remains on the stack due to the co_await below
-        //    await_one(a1, r.get_proxy(), count);
-        //    await_one(a2, r.get_proxy(), count);
-
-        //    co_await r;
-        //}
-
-        //template <typename V = void, typename U = T, typename std::enable_if<std::is_same<V, void>::value && !std::is_same<U, void>::value>::type* = nullptr>
-        //friend awaitable<void> operator&&(awaitable<V>&& a1, reference<awaitable<U>> a2)
-        //{
-        //    return operator_and(std::move(a1), a2);
-        //}
-
-    private:
-        static int& current_id()
-        {
-            thread_local static int s_current_id = 0;
-            return s_current_id;
-        }
-
-        static auto& registry()
-        {
-            thread_local static std::unordered_map<unsigned, ref> s_registry;
-            return s_registry;
-        }
-
-        unsigned _id = 0;
-
-    public:
-        value<T>& get_value()
-        {
-            return _value;
-        }
-
-    private:
-        value<T> _value;
-
-        std::exception_ptr _exp;
-
-        // NB: this constructor specifically doesn't register a proxy, since proxy usage makes no sense for coroutine enclosing awaitables
-        explicit awaitable(coroutine_handle<promise_type> coroutine)
-            : _coroutine(coroutine) {}
-
-        // the coroutine this awaitable is enclosing; this is created by promise_type::get_return_object
-        coroutine_handle<promise_type> _coroutine{ nullptr };
-
-        // the awaiter coroutine when this awaitable is a primitive - i.e. it doesn't enclose a coroutine, set only when _coroutine is nullptr!
-        std::unordered_set<coroutine_handle<>> _awaiter_coros;
-        std::chrono::high_resolution_clock::time_point _when; // NB: this should be initialized in the constructor, and cannot be modified 
-
-        bool _ready = false;
-        bool _suspend = false;
     };
 
     auto operator co_await(std::chrono::high_resolution_clock::duration duration)
