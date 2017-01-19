@@ -1,9 +1,7 @@
 #pragma once
 
-// ResumableThing.cpp : Defines the entry point for the console application.
-//
-
 #include <map>
+#include <list>
 #include <queue>
 #include <chrono>
 #include <string>
@@ -69,8 +67,11 @@ namespace pi
 
         void add_timed_wait_coro(std::chrono::high_resolution_clock::time_point when, coroutine_handle<> coro)
         {
-            auto r = _timed_wait_coros.emplace(when, std::unordered_set<coroutine_handle<>>{});
-            r.first->second.emplace(coro);
+            auto r = _timed_wait_coros.emplace(when, std::pair<std::list<coroutine_handle<>>, std::unordered_map<coroutine_handle<>, std::list<coroutine_handle<>>::iterator>>{});
+            assert(r.first->second.first.size() == r.first->second.second.size());
+            r.first->second.first.emplace_back(coro); // NB: the same coroutine cannot be suspended multiple times!
+            r.first->second.second.emplace(coro, --r.first->second.first.end());
+            assert(r.first->second.first.size() == r.first->second.second.size());
         }
 
         void remove_timed_wait_coro(std::chrono::high_resolution_clock::time_point when, coroutine_handle<> coro)
@@ -78,8 +79,15 @@ namespace pi
             auto it = _timed_wait_coros.find(when);
             if (it != _timed_wait_coros.end())
             {
-                it->second.erase(coro);
-                if (it->second.empty())
+                assert(it->second.first.size() == it->second.second.size());
+                auto it2 = it->second.second.find(coro);
+                if (it2 != it->second.second.end())
+                {
+                    it->second.first.erase(it2->second);
+                    it->second.second.erase(it2);
+                    assert(it->second.first.size() == it->second.second.size());
+                }
+                if (it->second.first.empty())
                 {
                     _timed_wait_coros.erase(it);
                 }
@@ -114,7 +122,7 @@ namespace pi
                     if (std::chrono::high_resolution_clock::now() < it->first)
                         break;
 
-                    for (auto& coro : it->second)
+                    for (auto& coro : it->second.first)
                     {
                         _ready_coros.push(coro);
                     }
@@ -139,7 +147,7 @@ namespace pi
         ~executor() = default;
 
         std::queue<coroutine_handle<>> _ready_coros;
-        std::map<std::chrono::high_resolution_clock::time_point, std::unordered_set<coroutine_handle<>>> _timed_wait_coros;
+        std::map<std::chrono::high_resolution_clock::time_point, std::pair<std::list<coroutine_handle<>>, std::unordered_map<coroutine_handle<>, std::list<coroutine_handle<>>::iterator>>> _timed_wait_coros;
 
         int _num_outstanding_coros = 0;
     };
@@ -321,8 +329,8 @@ namespace pi
                     return suspend_never{};
                 }
 
-                // TODO: we need to enforce FIFO ordering
-                std::unordered_set<coroutine_handle<>> _awaiter_coros;
+                // NB: we need to enforce FIFO ordering
+                std::list<coroutine_handle<>> _awaiter_coros;
 
                 auto final_suspend()
                 {
@@ -341,7 +349,7 @@ namespace pi
                 std::exception_ptr _exp;
                 void set_exception(std::exception_ptr exp)
                 {
-                    _exp = std::move(exp);
+                    _exp = exp;
                 }
             };
 
@@ -371,13 +379,13 @@ namespace pi
                         }
                         else
                         {
-                            _awaiter_coros.emplace(awaiter_coro); // TODO: FIFO ordering of the awaiters ...
+                            _awaiter_coros.emplace_back(awaiter_coro); // NB: guarantee FIFO ordering of the awaiters ...
                             executor::singleton().add_timed_wait_coro(_when, awaiter_coro);
                         }
                     }
                     else if (_suspend)
                     {
-                        _awaiter_coros.emplace(awaiter_coro); // TODO: FIFO ordering of the awaiters ...
+                        _awaiter_coros.emplace_back(awaiter_coro); // NB: guarantee FIFO ordering of the awaiters ...
                         executor::singleton().increment_num_outstanding_coros();
                     }
                     else
@@ -388,7 +396,7 @@ namespace pi
                 else
                 {
                     // I'm waiting for some other coroutine to finish, the awaiter's frame can only be queued until my awaited one finishes
-                    _coroutine.promise()._awaiter_coros.emplace(awaiter_coro);
+                    _coroutine.promise()._awaiter_coros.emplace_back(awaiter_coro); // NB: guarantee FIFO ordering of the awaiters ...
                     executor::singleton().increment_num_outstanding_coros();
                 }
             }
@@ -487,7 +495,7 @@ namespace pi
 
             void set_exception(std::exception_ptr exp)
             {
-                _exp = std::move(exp);
+                _exp = exp;
                 set_ready();
             }
 
@@ -505,7 +513,7 @@ namespace pi
             coroutine_handle<promise_type> _coroutine{ nullptr };
 
             // the awaiter coroutine when this awaitable is a primitive - i.e. it doesn't enclose a coroutine, set only when _coroutine is nullptr!
-            std::unordered_set<coroutine_handle<>> _awaiter_coros;
+            std::list<coroutine_handle<>> _awaiter_coros;
             std::chrono::high_resolution_clock::time_point _when; // NB: this should be initialized in the constructor, and cannot be modified 
 
             bool _ready = false;
