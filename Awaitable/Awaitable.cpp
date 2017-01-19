@@ -111,8 +111,8 @@ nawaitable test()
         auto a3 = awaitable<int>{ 5s };
         auto a4 = awaitable<int>{ 6s };
         {
-            auto ar = co_await((a2 || a3) || (a1 || a4));
-            assert(ar.get_value() == a1);
+            auto ar = co_await(a2 || (a3 || a1) || a4);
+            assert(ar == a1);
             std::cout << "co_await (a1 || a2)" << std::endl;
         }
     }
@@ -155,14 +155,14 @@ nawaitable cancel_after_timeout(cancellation& source, std::chrono::high_resoluti
 
 nawaitable test_cancellation_1(cancellation::token token)
 {
-    auto awtbl = awaitable<int>{ true }; // suspend, and returns the value from somewhere else
+    auto a = awaitable<int>{ true }; // suspend, and returns the value from somewhere else
 
-    // NB: I rely on the fact that awtbl stays on the stack, so I can capture it by reference
-    token.register_action([&awtbl] { awtbl.set_exception(std::make_exception_ptr(std::exception())); });
+    // NB: I rely on the fact that a stays on the stack, so I can capture it by reference
+    token.register_action([&a] { a.set_exception(std::make_exception_ptr(std::exception("test_cancellation_1"))); });
 
     try
     {
-        auto x = co_await awtbl;
+        auto x = co_await a;
     }
     catch (std::exception e)
     {
@@ -172,13 +172,13 @@ nawaitable test_cancellation_1(cancellation::token token)
 
 nawaitable test_cancellation_2(cancellation::token token)
 {
-    auto awtbl = awaitable<void>{ 4s };
+    auto a = awaitable<void>{ 4s };
 
-    token.register_action([&awtbl] { awtbl.set_exception(std::make_exception_ptr(std::exception())); });
+    token.register_action([&a] { a.set_exception(std::make_exception_ptr(std::exception("test_cancellation_2"))); });
 
     try
     {
-        co_await awtbl;
+        co_await a;
     }
     catch (std::exception e)
     {

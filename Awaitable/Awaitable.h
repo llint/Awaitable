@@ -312,7 +312,7 @@ namespace pi
             {
                 awaitable get_return_object()
                 {
-                    return awaitable{ coroutine_handle<promise_type>::from_promise(*this) };
+                    return awaitable{ *this };
                 }
 
                 auto initial_suspend()
@@ -478,7 +478,7 @@ namespace pi
                 _ready = true;
             }
 
-            template <typename U = T, typename std::enable_if<!std::is_same<U, void>::value>::type* = nullptr>
+            template <typename U = T, typename std::enable_if<!std::is_void<U>::value>::type* = nullptr>
             void set_ready(U&& value)
             {
                 _value._value = std::move(value);
@@ -514,6 +514,11 @@ namespace pi
 
         typename impl::ptr _impl_ptr;
 
+        explicit awaitable(typename impl::promise_type& promise)
+            : _impl_ptr(std::make_shared<impl>(coroutine_handle<typename impl::promise_type>::from_promise(promise)))
+        {
+        }
+
     public:
         struct promise_type : impl::promise_type
         {
@@ -531,11 +536,6 @@ namespace pi
 
         explicit awaitable(std::chrono::high_resolution_clock::duration timeout)
             : _impl_ptr(std::make_shared<impl>(timeout))
-        {
-        }
-
-        explicit awaitable(coroutine_handle<promise_type> coroutine)
-            : _impl_ptr(std::make_shared<impl>(coroutine))
         {
         }
 
@@ -569,7 +569,7 @@ namespace pi
             _impl_ptr->set_ready();
         }
 
-        template <typename U = T, typename std::enable_if<!std::is_same<U, void>::value>::type* = nullptr>
+        template <typename U = T, typename std::enable_if<!std::is_void<U>::value>::type* = nullptr>
         void set_ready(U&& value)
         {
             _impl_ptr->set_ready(std::move(value));
@@ -591,7 +591,7 @@ namespace pi
         static nawaitable await_one(awaitable a, awaitable<awaitable> r, cancellation::token ct = cancellation::token::none())
         {
             // NB: the cancellation token will remain in scope until the current function returns
-            ct.register_action([a] { a.set_exception(std::make_exception_ptr(std::exception("await_one.cancellation"))); });
+            ct.register_action([&a] { a.set_exception(std::make_exception_ptr(std::exception("await_one.cancellation"))); });
 
             try
             {
@@ -611,7 +611,7 @@ namespace pi
         static nawaitable await_one(awaitable<awaitable> a, awaitable<awaitable> r, cancellation::token ct = cancellation::token::none())
         {
             // NB: the cancellation token will remain in scope until the current function returns
-            ct.register_action([a] { a.set_exception(std::make_exception_ptr(std::exception("await_one.cancellation"))); });
+            ct.register_action([&a] { a.set_exception(std::make_exception_ptr(std::exception("await_one.cancellation"))); });
 
             try
             {
@@ -623,13 +623,13 @@ namespace pi
                 return;
             }
 
-            p.set_ready(a.get_value());
+            r.set_ready(a.get_value());
         }
 
         static nawaitable await_one(awaitable a, awaitable<void> r, size_t& count = 0, cancellation::token ct = cancellation::token::none())
         {
             // NB: the cancellation token will remain in scope until the current function returns
-            ct.register_action([a] { a.set_exception(std::make_exception_ptr(std::exception("await_one.cancellation"))); });
+            ct.register_action([&a] { a.set_exception(std::make_exception_ptr(std::exception("await_one.cancellation"))); });
 
             try
             {
@@ -725,24 +725,30 @@ namespace pi
             co_await r;
         }
 
-        template <typename U = T, typename std::enable_if<!std::is_same<U, void>::value>::type* = nullptr>
-        friend awaitable<void> operator&&(awaitable<void> a1, awaitable<U> a2)
-        {
-            awaitable<void> r{ true };
+        template<typename U>
+        friend std::enable_if_t<!std::is_void<U>::value, awaitable<void>> operator&&(awaitable<void> a1, awaitable<U> a2);
 
-            size_t count = 2; // NB: count remains on the stack due to the co_await below
-            await_one(a1, r, count);
-            await_one(a2, r, count);
-
-            co_await r;
-        }
-
-        template <typename U = T, typename std::enable_if<!std::is_same<U, void>::value>::type* = nullptr>
-        friend awaitable<void> operator&&(awaitable<U> a1, awaitable<void> a2)
-        {
-            return a1 && a2;
-        }
+        template<typename U>
+        friend std::enable_if_t<!std::is_void<U>::value, awaitable<void>> operator&&(awaitable<U> a1, awaitable<void> a2);
     };
+
+    template <typename T>
+    std::enable_if_t<!std::is_void<T>::value, awaitable<void>> operator&&(awaitable<void> a1, awaitable<T> a2)
+    {
+        awaitable<void> r{ true };
+
+        size_t count = 2; // NB: count remains on the stack due to the co_await below
+        awaitable<void>::await_one(a1, r, count);
+        awaitable<T>::await_one(a2, r, count);
+
+        co_await r;
+    }
+
+    template <typename T>
+    std::enable_if_t<!std::is_void<T>::value, awaitable<void>> operator&&(awaitable<T> a1, awaitable<void> a2)
+    {
+        return a2 && a1;
+    }
 
     auto operator co_await(std::chrono::high_resolution_clock::duration duration)
     {
