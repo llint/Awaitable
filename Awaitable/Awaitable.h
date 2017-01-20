@@ -603,35 +603,35 @@ namespace pi
 
             try
             {
+                // TODO: await_resume moves the result out, and here we need to retain the value, and probably need to set it back to 'a'
+                // the challenge now is to deal gracefully both the void and non-void return types with co_await!
                 co_await a;
+                r.set_ready(a);
             }
             catch (...)
             {
                 r.set_exception(std::current_exception());
                 return;
             }
-
-            r.set_ready(a);
         }
 
         // NB: use of template template parameter is to avoid recursive template instantiation when retrieving the proxy type!
         //template < template <typename> class _awaitable > // TODO: try without template template parameter
-        static nawaitable await_one(awaitable<awaitable> a, awaitable<awaitable> r, cancellation::token ct = cancellation::token::none())
+        static nawaitable await_one(awaitable<awaitable> aa, awaitable<awaitable> r, cancellation::token ct = cancellation::token::none())
         {
             // NB: the cancellation token will remain in scope until the current function returns
-            ct.register_action([&a] { a.set_exception(std::make_exception_ptr(std::exception("await_one.cancellation"))); });
+            ct.register_action([&aa] { aa.set_exception(std::make_exception_ptr(std::exception("await_one.cancellation"))); });
 
             try
             {
-                co_await a;
+                auto a = co_await aa;
+                r.set_ready(a);
             }
             catch (...)
             {
                 r.set_exception(std::current_exception());
                 return;
             }
-
-            r.set_ready(a.get_value());
         }
 
         static nawaitable await_one(awaitable a, awaitable<void> r, size_t& count = 0, cancellation::token ct = cancellation::token::none())
@@ -642,16 +642,16 @@ namespace pi
             try
             {
                 co_await a;
+
+                if (count > 0 && --count == 0)
+                {
+                    r.set_ready();
+                }
             }
             catch (...)
             {
                 r.set_exception(std::current_exception());
                 return;
-            }
-
-            if (count > 0 && --count == 0)
-            {
-                r.set_ready();
             }
         }
 
