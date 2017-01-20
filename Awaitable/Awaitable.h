@@ -433,7 +433,7 @@ namespace pi
                 }
             };
 
-            T await_resume() noexcept
+            T await_resume()
             {
                 if (_coroutine)
                 {
@@ -489,7 +489,7 @@ namespace pi
             template <typename U = T, typename std::enable_if<!std::is_void<U>::value>::type* = nullptr>
             void set_ready(U&& value)
             {
-                _value._value = std::move(value);
+                _value._value = std::forward<U>(value);
                 set_ready();
             }
 
@@ -567,7 +567,7 @@ namespace pi
             _impl_ptr->await_suspend(awaiter_coro);
         }
 
-        T await_resume() noexcept
+        T await_resume()
         {
             return _impl_ptr->await_resume();
         }
@@ -580,7 +580,7 @@ namespace pi
         template <typename U = T, typename std::enable_if<!std::is_void<U>::value>::type* = nullptr>
         void set_ready(U&& value)
         {
-            _impl_ptr->set_ready(std::move(value));
+            _impl_ptr->set_ready(std::forward<U>(value));
         }
 
         void set_exception(std::exception_ptr exp)
