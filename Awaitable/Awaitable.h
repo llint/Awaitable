@@ -460,7 +460,7 @@ namespace pi
                     std::rethrow_exception(_exp);
                 }
 
-                return _value.move();
+                return _value.get();
             }
 
             void set_ready()
@@ -624,8 +624,8 @@ namespace pi
 
             try
             {
-                auto a = co_await aa;
-                r.set_ready(a);
+                co_await aa;
+                r.set_ready(aa.get_value());
             }
             catch (...)
             {
