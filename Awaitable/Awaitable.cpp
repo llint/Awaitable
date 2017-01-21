@@ -8,18 +8,18 @@
 
 using namespace pi;
 
-nawaitable set_ready_after_timeout(awaitable<int> awtbl, std::chrono::high_resolution_clock::duration timeout)
+nawaitable set_ready_after_timeout(awaitable<int> a, std::chrono::high_resolution_clock::duration timeout)
 {
     co_await timeout; // timed wait
 
-    awtbl.set_ready(123);
+    a.set_ready(123);
 }
 
-nawaitable set_exception_after_timeout(awaitable<int> awtbl, std::chrono::high_resolution_clock::duration timeout)
+nawaitable set_exception_after_timeout(awaitable<int> a, std::chrono::high_resolution_clock::duration timeout)
 {
     co_await timeout;
 
-    awtbl.set_exception(std::make_exception_ptr(std::exception()));
+    a.set_exception(std::make_exception_ptr(std::exception("set_exception_after_timeout")));
 }
 
 awaitable<int> named_counter(std::string name)
@@ -33,22 +33,22 @@ awaitable<int> named_counter(std::string name)
     std::cout << "counter(" << name << ") resumed #" << 2 << " ### " << i << std::endl;
 
     {
-        auto awtbl = awaitable<int>{ true }; // suspend, and returns the value from somewhere else
-        set_ready_after_timeout(awtbl, 3s);
-        auto x = co_await awtbl;
+        auto a = awaitable<int>{ true }; // suspend, and returns the value from somewhere else
+        set_ready_after_timeout(a, 3s);
+        auto x = co_await a;
         std::cout << "counter(" << name << ") resumed #" << 3 << " ### " << x << std::endl;
     }
 
     try
     {
-        auto awtbl = awaitable<int>{ true }; // suspend, and returns the value from somewhere else
-        set_exception_after_timeout(awtbl, 3s);
-        auto x = co_await awtbl;
+        auto a = awaitable<int>{ true }; // suspend, and returns the value from somewhere else
+        set_exception_after_timeout(a, 3s);
+        auto x = co_await a;
         std::cout << "counter(" << name << ") resumed #" << 4 << " ### " << x << std::endl;
     }
     catch (std::exception e)
     {
-        std::cout << "### caught exception" << std::endl;
+        std::cout << "### caught exception: " << e.what() << std::endl;
     }
 
     co_return 42;
@@ -72,14 +72,13 @@ nawaitable test_multi_await(awaitable<int> a, const std::string& name)
 
 nawaitable test()
 {
+    try
     {
-        auto a1 = awaitable<void>{ 5s };
-        auto a2 = awaitable<void>{ 4s };
-        std::deque<awaitable<void>> as{ a1, a2 };
-        auto ar = co_await awaitable<void>::when_any(as);
-        assert(ar == a2);
-        std::cout << "co_await awaitable<void>::when_any(as)" << std::endl;
-        co_await (a1 && a2); // do a join, otherwise the awaitable that times out later will come back finding out it's destructed already - dangling reference!
+        co_await test_exception();
+    }
+    catch (...)
+    {
+        std::cout << "caught exception" << std::endl;
     }
 
     {
@@ -95,13 +94,14 @@ nawaitable test()
         // usage of std::variant<awaitable, awaitable::proxy> in place of ref
     }
 
-    try
     {
-        co_await test_exception();
-    }
-    catch (...)
-    {
-        std::cout << "caught exception" << std::endl;
+        auto a1 = awaitable<void>{ 5s };
+        auto a2 = awaitable<void>{ 4s };
+        std::deque<awaitable<void>> as{ a1, a2 };
+        auto ar = co_await awaitable<void>::when_any(as);
+        assert(ar == a2);
+        std::cout << "co_await awaitable<void>::when_any(as)" << std::endl;
+        co_await(a1 && a2); // do a join, otherwise the awaitable that times out later will come back finding out it's destructed already - dangling reference!
     }
 
     {
@@ -146,7 +146,7 @@ nawaitable test()
     std::cout << "### after co_await named_counter(y): " << y << std::endl;
 }
 
-nawaitable cancel_after_timeout(cancellation& source, std::chrono::high_resolution_clock::duration timeout)
+nawaitable cancel_after_timeout(cancellation source, std::chrono::high_resolution_clock::duration timeout)
 {
     co_await timeout;
 
@@ -188,10 +188,12 @@ nawaitable test_cancellation_2(cancellation::token token)
 
 int main()
 {
-    cancellation source;
-    cancel_after_timeout(source, 3s);
-    test_cancellation_1(source.get_token());
-    test_cancellation_2(source.get_token());
+    {
+        cancellation source;
+        cancel_after_timeout(source, 3s);
+        test_cancellation_1(source.get_token());
+        test_cancellation_2(source.get_token());
+    }
 
     test();
 

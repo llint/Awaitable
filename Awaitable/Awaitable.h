@@ -155,43 +155,57 @@ namespace pi
     // NB: try keep cancellation sources in scope, and it can freely pass tokens to other coroutines without worrying about becoming dangling
     class cancellation
     {
-    public:
-        typedef cancellation* ptr;
-
-        cancellation() = default;
-        ~cancellation() = default;
-
-        cancellation(const cancellation&) = delete;
-        cancellation& operator=(const cancellation&) = delete;
-
-        cancellation(cancellation&& other)
-            : _registry(std::move(other._registry))
+    private:
+        struct impl
         {
-            // as we moved the registry, we need to make sure that the cancellation source for all the tokens is updated
-            for (auto& entry : _registry)
+            typedef std::shared_ptr<impl> ptr;
+
+            impl() = default;
+            ~impl() = default;
+
+            impl(const impl&) = delete;
+            impl(impl&&) = delete;
+            impl& operator=(const impl&) = delete;
+
+            void fire()
             {
-                entry.first->_source = this;
+                for (auto& entry : _registry)
+                {
+                    for (auto& f : entry.second)
+                    {
+                        f();
+                    }
+                }
+
+                _registry.clear();
             }
-        }
+
+            std::unordered_map<void*, std::deque<std::function<void()>>> _registry;
+        };
+
+        impl::ptr _impl_ptr;
+
+    public:
+        cancellation()
+            : _impl_ptr(std::make_shared<impl>())
+        {}
+
+        ~cancellation() = default;
+        cancellation(const cancellation&) = default;
+        cancellation& operator=(const cancellation&) = default;
+        cancellation(cancellation&& other) = default;
 
         // NB: try keep the token on the stack or in scope, it would keep effective during the course of co_await!
         class token
         {
-            friend class cancellation;
-
         public:
-            typedef token* ptr;
-
-            token(cancellation::ptr source = nullptr)
+            token(impl::ptr source = nullptr)
                 : _source(source)
             {
             }
 
-            // token cannot be moved; when copied, the new copy will appear as a new entry in the registry, if ever being used to register new actions
-            token(const token& other)
-                : _source(other._source)
-            {
-            }
+            token(const token&) = default;
+            token(token&&) = default;
 
             void register_action(std::function<void()>&& f)
             {
@@ -222,29 +236,18 @@ namespace pi
             }
 
         private:
-            typename cancellation::ptr _source;
+            impl::ptr _source;
         };
 
         token get_token()
         {
-            return { this };
+            return { _impl_ptr };
         }
 
         void fire()
         {
-            for (auto& entry : _registry)
-            {
-                for (auto& f : entry.second)
-                {
-                    f();
-                }
-            }
-
-            _registry.clear();
+            _impl_ptr->fire();
         }
-
-    private:
-        std::unordered_map<typename token::ptr, std::deque<std::function<void()>>> _registry;
     };
 
     // NB: this class is intended for fire and forget type of coroutines
