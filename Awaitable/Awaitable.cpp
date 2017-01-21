@@ -8,18 +8,18 @@
 
 using namespace pi;
 
-nawaitable set_ready_after_timeout(awaitable<int>::proxy awtbl, std::chrono::high_resolution_clock::duration timeout)
+nawaitable set_ready_after_timeout(awaitable<int> a, std::chrono::high_resolution_clock::duration timeout)
 {
     co_await timeout; // timed wait
 
-    awtbl.set_ready(123);
+    a.set_ready(123);
 }
 
-nawaitable set_exception_after_timeout(awaitable<int>::proxy awtbl, std::chrono::high_resolution_clock::duration timeout)
+nawaitable set_exception_after_timeout(awaitable<int> a, std::chrono::high_resolution_clock::duration timeout)
 {
     co_await timeout;
 
-    awtbl.set_exception(std::make_exception_ptr(std::exception()));
+    a.set_exception(std::make_exception_ptr(std::exception("set_exception_after_timeout")));
 }
 
 awaitable<int> named_counter(std::string name)
@@ -33,22 +33,22 @@ awaitable<int> named_counter(std::string name)
     std::cout << "counter(" << name << ") resumed #" << 2 << " ### " << i << std::endl;
 
     {
-        auto awtbl = awaitable<int>{ true }; // suspend, and returns the value from somewhere else
-        set_ready_after_timeout(awtbl.get_proxy(), 3s);
-        auto x = co_await awtbl;
+        auto a = awaitable<int>{ true }; // suspend, and returns the value from somewhere else
+        set_ready_after_timeout(a, 3s);
+        auto x = co_await a;
         std::cout << "counter(" << name << ") resumed #" << 3 << " ### " << x << std::endl;
     }
 
     try
     {
-        auto awtbl = awaitable<int>{ true }; // suspend, and returns the value from somewhere else
-        set_exception_after_timeout(awtbl.get_proxy(), 3s);
-        auto x = co_await awtbl;
+        auto a = awaitable<int>{ true }; // suspend, and returns the value from somewhere else
+        set_exception_after_timeout(a, 3s);
+        auto x = co_await a;
         std::cout << "counter(" << name << ") resumed #" << 4 << " ### " << x << std::endl;
     }
     catch (std::exception e)
     {
-        std::cout << "### caught exception" << std::endl;
+        std::cout << "### caught exception: " << e.what() << std::endl;
     }
 
     co_return 42;
@@ -63,38 +63,15 @@ awaitable<void> test_exception()
     std::cout << "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" << std::endl;
 }
 
-nawaitable test_multi_await(awaitable<int>::ref a, const std::string& name)
+nawaitable test_multi_await(awaitable<int> a, const std::string& name)
 {
-    co_await a.get();
+    co_await a;
 
     std::cout << "### test_multi_await: " << name << std::endl;
 }
 
 nawaitable test()
 {
-    {
-        auto a1 = awaitable<void>{ 5s };
-        auto a2 = awaitable<void>{ 4s };
-        std::deque<awaitable<void>::ref> as{ a1, a2 };
-        auto ar = co_await awaitable<void>::when_any(as);
-        assert(ar == a2);
-        std::cout << "co_await awaitable<void>::when_any(as)" << std::endl;
-        co_await (a1 && a2); // do a join, otherwise the awaitable that times out later will come back finding out it's destructed already - dangling reference!
-    }
-
-    {
-        auto a = awaitable<int>{ true };
-        set_ready_after_timeout(a.get_proxy(), 3s);
-        test_multi_await(a, "A");
-        test_multi_await(a, "B");
-        co_await a; // here is the potential problem:
-        std::cout << "### after 'co_await a' ### " << std::endl;
-        // if the current coroutine is resumed first, then the current scope will exit, destructing 'a', while the two test_multi_await coroutines will then resume
-        // then they will operate on the now dangling reference to a, then memory corruption!
-        // TODO: in addition to changing the usage of ref to proxy, we also need to guarantee the ordering of the awaiters, so we get less suprises when they are resumed!
-        // usage of std::variant<awaitable, awaitable::proxy> in place of ref
-    }
-
     try
     {
         co_await test_exception();
@@ -105,13 +82,36 @@ nawaitable test()
     }
 
     {
+        auto a = awaitable<int>{ true };
+        set_ready_after_timeout(a, 3s);
+        test_multi_await(a, "A");
+        test_multi_await(a, "B");
+        co_await a; // here is the potential problem:
+        std::cout << "### after 'co_await a' ### " << std::endl;
+        // if the current coroutine is resumed first, then the current scope will exit, destructing 'a', while the two test_multi_await coroutines will then resume
+        // then they will operate on the now dangling reference to a, then memory corruption!
+        // TODO: in addition to changing the usage of ref to proxy, we also need to guarantee the ordering of the awaiters, so we get less suprises when they are resumed!
+        // usage of std::variant<awaitable, awaitable::proxy> in place of ref
+    }
+
+    {
+        auto a1 = awaitable<void>{ 5s };
+        auto a2 = awaitable<void>{ 4s };
+        std::deque<awaitable<void>> as{ a1, a2 };
+        auto ar = co_await awaitable<void>::when_any(as);
+        assert(ar == a2);
+        std::cout << "co_await awaitable<void>::when_any(as)" << std::endl;
+        co_await(a1 && a2); // do a join, otherwise the awaitable that times out later will come back finding out it's destructed already - dangling reference!
+    }
+
+    {
         // NB: it doesn't make sense to chain temporary awaitables with operator||, because the return value must be referencing one of the input awaitables
         auto a1 = awaitable<int>{ 3s };
         auto a2 = awaitable<int>{ 4s };
         auto a3 = awaitable<int>{ 5s };
         auto a4 = awaitable<int>{ 6s };
         {
-            auto ar = co_await((a2 || a3) || (a1 || a4));
+            auto ar = co_await(a2 || (a3 || a1) || a4);
             assert(ar == a1);
             std::cout << "co_await (a1 || a2)" << std::endl;
         }
@@ -127,15 +127,14 @@ nawaitable test()
         auto a1 = awaitable<int>{ 3s };
         auto a2 = awaitable<int>{ 4s };
         auto a3 = awaitable<int>{ 5s };
-        co_await (a1 && a2);
-        co_await (awaitable<int>{3s} && a3);
-        std::cout << "co_await (a1 && a2)" << std::endl;
+        co_await (a1 && a2 && a3);
+        std::cout << "co_await (a1 && a2 && a3)" << std::endl;
     }
 
     {
         auto a1 = awaitable<void>{ 5s };
         auto a2 = awaitable<void>{ 4s };
-        std::deque<awaitable<void>::ref> as{ a1, a2 };
+        std::deque<awaitable<void>> as{ a1, a2 };
         co_await awaitable<void>::when_all(as);
         std::cout << "co_await awaitable<void>::when_all(as)" << std::endl;
     }
@@ -147,7 +146,7 @@ nawaitable test()
     std::cout << "### after co_await named_counter(y): " << y << std::endl;
 }
 
-nawaitable cancel_after_timeout(cancellation& source, std::chrono::high_resolution_clock::duration timeout)
+nawaitable cancel_after_timeout(cancellation source, std::chrono::high_resolution_clock::duration timeout)
 {
     co_await timeout;
 
@@ -156,14 +155,14 @@ nawaitable cancel_after_timeout(cancellation& source, std::chrono::high_resoluti
 
 nawaitable test_cancellation_1(cancellation::token token)
 {
-    auto awtbl = awaitable<int>{ true }; // suspend, and returns the value from somewhere else
+    auto a = awaitable<int>{ true }; // suspend, and returns the value from somewhere else
 
-    // NB: I rely on the fact that awtbl stays on the stack, so I can capture it by reference
-    token.register_action([&awtbl] { awtbl.set_exception(std::make_exception_ptr(std::exception())); });
+    // NB: I rely on the fact that a stays on the stack, so I can capture it by reference
+    token.register_action([&a] { a.set_exception(std::make_exception_ptr(std::exception("test_cancellation_1"))); });
 
     try
     {
-        auto x = co_await awtbl;
+        auto x = co_await a;
     }
     catch (std::exception e)
     {
@@ -173,13 +172,13 @@ nawaitable test_cancellation_1(cancellation::token token)
 
 nawaitable test_cancellation_2(cancellation::token token)
 {
-    auto awtbl = awaitable<void>{ 4s };
+    auto a = awaitable<void>{ 4s };
 
-    token.register_action([&awtbl] { awtbl.set_exception(std::make_exception_ptr(std::exception())); });
+    token.register_action([&a] { a.set_exception(std::make_exception_ptr(std::exception("test_cancellation_2"))); });
 
     try
     {
-        co_await awtbl;
+        co_await a;
     }
     catch (std::exception e)
     {
@@ -189,10 +188,12 @@ nawaitable test_cancellation_2(cancellation::token token)
 
 int main()
 {
-    cancellation source;
-    cancel_after_timeout(source, 3s);
-    test_cancellation_1(source.get_token());
-    test_cancellation_2(source.get_token());
+    {
+        cancellation source;
+        cancel_after_timeout(source, 3s);
+        test_cancellation_1(source.get_token());
+        test_cancellation_2(source.get_token());
+    }
 
     test();
 
