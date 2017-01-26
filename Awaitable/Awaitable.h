@@ -620,22 +620,22 @@ namespace pi
 
         // NB: use of template template parameter is to avoid recursive template instantiation when retrieving the proxy type!
         //template < template <typename> class _awaitable > // TODO: try without template template parameter
-        static nawaitable await_one(awaitable<awaitable> aa, awaitable<awaitable> r, cancellation::token ct = cancellation::token::none())
-        {
-            // NB: the cancellation token will remain in scope until the current function returns
-            ct.register_action([&aa] { aa.set_exception(std::make_exception_ptr(std::exception("await_one.cancellation"))); });
+        //static nawaitable await_one(awaitable<awaitable> aa, awaitable<awaitable> r, cancellation::token ct = cancellation::token::none())
+        //{
+        //    // NB: the cancellation token will remain in scope until the current function returns
+        //    ct.register_action([&aa] { aa.set_exception(std::make_exception_ptr(std::exception("await_one.cancellation"))); });
 
-            try
-            {
-                co_await aa;
-                r.set_ready(aa.get_value());
-            }
-            catch (...)
-            {
-                r.set_exception(std::current_exception());
-                return;
-            }
-        }
+        //    try
+        //    {
+        //        co_await aa;
+        //        r.set_ready(aa.get_value());
+        //    }
+        //    catch (...)
+        //    {
+        //        r.set_exception(std::current_exception());
+        //        return;
+        //    }
+        //}
 
         static nawaitable await_one(awaitable a, awaitable<void> r, size_t& count = 0, cancellation::token ct = cancellation::token::none())
         {
