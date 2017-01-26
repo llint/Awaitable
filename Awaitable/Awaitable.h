@@ -691,10 +691,9 @@ namespace pi
         // [2-1]
         friend awaitable<awaitable> operator||(awaitable<awaitable> a1, awaitable a2)
         {
-            awaitable<awaitable> r{ true };
-            await_one(a1, r);
-            await_one(a2, r);
-            return r;
+            // NB: instead of creating another awaitable<awaitable>, we just reuse a1! 
+            await_one(a2, a1);
+            return a1;
         }
 
         // [2-2]
