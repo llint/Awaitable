@@ -86,12 +86,8 @@ nawaitable test()
         set_ready_after_timeout(a, 3s);
         test_multi_await(a, "A");
         test_multi_await(a, "B");
-        co_await a; // here is the potential problem:
+        co_await a;
         std::cout << "### after 'co_await a' ### " << std::endl;
-        // if the current coroutine is resumed first, then the current scope will exit, destructing 'a', while the two test_multi_await coroutines will then resume
-        // then they will operate on the now dangling reference to a, then memory corruption!
-        // TODO: in addition to changing the usage of ref to proxy, we also need to guarantee the ordering of the awaiters, so we get less suprises when they are resumed!
-        // usage of std::variant<awaitable, awaitable::proxy> in place of ref
     }
 
     {
@@ -101,7 +97,7 @@ nawaitable test()
         auto ar = co_await awaitable<void>::when_any(as);
         assert(ar == a2);
         std::cout << "co_await awaitable<void>::when_any(as)" << std::endl;
-        co_await(a1 && a2); // do a join, otherwise the awaitable that times out later will come back finding out it's destructed already - dangling reference!
+        co_await(a1 && a2);
     }
 
     {
@@ -118,10 +114,6 @@ nawaitable test()
     }
 
     // NB: what happens if we do: co_await (a1 || a2 || a1 || a2)?
-    // in the current implmentation, the second coroutine that awaits the same awaitable which was awaited by another coroutine already
-    // so when the awaitable is awaited, only the most recent awaiter would be resumed, the previous one would never be awaken up anymore!
-    // TODO: we might want to use a hashset to store all the awaiters of the same awaitable in the promise_type, so when the awaitable is
-    // awaken, all the awaiters would be resumed
 
     {
         auto a1 = awaitable<int>{ 3s };
